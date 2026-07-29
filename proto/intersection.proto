@@ -1,0 +1,28 @@
+syntax = "proto3";
+
+package intersection;
+
+option go_package = "github.com/Vittorio17/Autonomous-Intersection-Manager/proto";
+
+service IntersectionService{
+    //Bidirectional stream with an open channel
+    rpc Negotiate(stream VehicleRequest) returns (stream ManagerResponse);
+}
+
+message VehicleRequest{
+    string vehicle_id = 1;
+    double speed = 2; // m/s
+    double eta = 3; //Seconds estimate to arrive 
+}
+
+enum CommandStatus{
+    STATUS_UNKNOW = 0; // Default state to avoid accidental commands
+    STATUS_ACK_LOCK = 1; // Access allowed, intersection blocked for the vehicle
+    STATUS_REJECT = 2; // Access denied, vehicle must stop or recalculate
+    STATUS_ADJUST_SPEED = 3; // Request to change speed to optimize flow
+}
+
+message ManagerResponse{
+    string vehicle_id = 1;
+    CommandStatus status = 2;
+}
