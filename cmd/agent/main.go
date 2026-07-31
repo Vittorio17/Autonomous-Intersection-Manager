@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"io"
+	"os"
 	
 	pb "github.com/Vittorio17/Autonomous-Intersection-Manager/proto"
 	"google.golang.org/grpc"
@@ -11,11 +12,18 @@ import (
 )
 
 func main() {
-	log.Println("Tentativo di connessione al Manager su localhost:50051...")
+	// Legge l'indirizzo, se non c'è usa localhost come fallback per i test senza Docker
+	targetAddr := os.Getenv("MANAGER_ADDR")
+    if targetAddr == "" {
+        targetAddr = "localhost:50051"
+    }
+
+    log.Printf("Tentativo di connessione al Manager su %s...\n", targetAddr)
+
+    conn, err := grpc.NewClient(targetAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 
 	// 1. Imposta la connessione client gRPC. 
 	// Usiamo insecure.NewCredentials() perché per ora non stiamo usando certificati SSL/TLS.
-	conn, err := grpc.NewClient("localhost:50051", grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		log.Fatalf("Impossibile connettersi al server: %v", err)
 	}
