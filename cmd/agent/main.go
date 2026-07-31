@@ -5,11 +5,21 @@ import (
 	"log"
 	"io"
 	"os"
+	"sync"
+	"time"
 	
 	pb "github.com/Vittorio17/Autonomous-Intersection-Manager/proto"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
+
+//Stato di un auto in movimento
+type VehicleSimulator struct {
+    mu       sync.Mutex
+    ID       string
+    Speed    float64 // m/s
+    Distance float64 // metri mancanti all'incrocio
+}
 
 func main() {
 	// Legge l'indirizzo, se non c'è usa localhost come fallback per i test senza Docker
@@ -42,39 +52,87 @@ func main() {
 
 	log.Println("Stream aperto con successo! Connessione stabilita.")
 
-	req := &pb.VehicleRequest{
-		VehicleId: "CAR_001",
-		Speed:     50.0,
-		Eta:       12.4,
+	// Inizializziamo il nostro veicolo a 500 metri dall'incrocio, a 50 m/s
+	sim := &VehicleSimulator{
+		ID:       "CAR_001",
+		Speed:    50.0,
+		Distance: 500.0,
 	}
 
-	// 2. Inviare la richiesta
-	log.Printf("Invio telemetria -> ID: %s | Speed: %.1f m/s | ETA: %.1f s\n", req.VehicleId, req.Speed, req.Eta)
-	if err := stream.Send(req); err != nil {
-		log.Printf("ERRORE: Fallimento durante l'invio dei dati: %v\n", err)
-		return
-	}
+	waitc := make(chan struct{})
 
-	// 3. Chiudere la metà in "uscita" dello stream
-	// Diciamo al Manager: "Non ho più telemetria da inviare". 
-	// Questo scatenerà l'errore `io.EOF` sul server, permettendogli di chiudere il ciclo in modo pulito.
-	if err := stream.CloseSend(); err != nil {
-		log.Printf("ERRORE durante la chiusura dello stream in uscita: %v\n", err)
-	}
+	// goroutine in background
+	go func() {
+		for {
+			res, err := stream.Recv()
+			if err == io.EOF {
+				close(waitc)
+				return
+			}
+			if err != nil {
+				log.Fatalf("Errore ricezione: %v", err)
+			}
 
-	// 4. Leggere la risposta del Manager
+			if res.Status == pb.CommandStatus_STATUS_REJECT {
+				// Blocca il mutex perché sta modificando la velocità,
+				// mentre il loop principale la sta leggendo contemporaneamente
+				sim.mu.Lock()
+				// Riduce la velocità del 20%
+				sim.Speed = sim.Speed * 0.8
+				// Stampiamo il log
+				log.Printf("Frenata d'emergenza! Accesso negato. Nuova velocità: %.2f m/s", sim.Speed)
+				sim.mu.Unlock()
+			} else if res.Status == pb.CommandStatus_STATUS_ACK_LOCK {
+				// Opzionale: Stampiamo un piccolo feedback visivo se va tutto bene
+				// log.Println("Semaforo verde confermato dal Manager.")
+			}
+			}
+	}()
+
 	for {
-		res, err := stream.Recv()
-		if err == io.EOF {
-			log.Println("Il Manager ha chiuso lo stream correttamente. Disconnessione.")
-			break
-		}
-		if err != nil {
-			log.Printf("ERRORE: Connessione interrotta durante la lettura: %v\n", err)
-			break
-		}
-		// 5. Loggare la risposta a console
-		log.Printf("Risposta ricevuta <- Veicolo: %s | Comando: %s\n", res.VehicleId, res.Status)
-	}
+        sim.mu.Lock()
+        // Aggiorna la distanza
+        sim.Distance -= sim.Speed * 1.0 
+        
+        if sim.Distance <= 0 {
+            sim.mu.Unlock()
+            log.Println("Incrocio superato! Disconnessione in corso...")
+            
+            // Chiude la comunicazione verso il server
+            if err := stream.CloseSend(); err != nil {
+                log.Printf("Errore chiusura stream: %v", err)
+            }
+            break
+        }
+
+        // Calcola il nuovo ETA (tempo = spazio / velocità)
+        eta := sim.Distance / sim.Speed
+        
+        // Copia i dati estratti per inviarli in modo sicuro fuori dal Mutex
+        currentID := sim.ID
+        currentSpeed := sim.Speed
+        currentDistance := sim.Distance
+        sim.mu.Unlock()
+        
+        // Crea il pacchetto Protobuf con i dati aggiornati
+        req := &pb.VehicleRequest{
+            VehicleId: currentID,
+            Speed:     currentSpeed,
+            Eta:       eta,
+        }
+
+        // Invia la telemetria al Manager
+        if err := stream.Send(req); err != nil {
+            log.Fatalf("Errore durante l'invio della telemetria: %v", err)
+        }
+        
+        log.Printf("In movimento... Distanza: %.1fm | Velocità: %.1fm/s | ETA: %.2fs", currentDistance, currentSpeed, eta)
+
+        // Aspetta 1 secondo prima del prossimo ciclo
+        time.Sleep(1 * time.Second)
+    }
+
+    // Aspetta che la goroutine finisca di processare le ultime risposte
+    <-waitc
 
 }

@@ -79,7 +79,7 @@ func (s *intersectionServer) Negotiate(stream pb.IntersectionService_NegotiateSe
 
 		var decision pb.CommandStatus
 
-		if(s.registry.HasConflict(req.VeihcleId,req.Eta)){
+		if(s.registry.HasConflict(req.VehicleId,req.Eta)){
 			decision = pb.CommandStatus_STATUS_REJECT
             log.Printf("ATTENZIONE: Conflitto rilevato per %s (ETA: %.2f). Rifiutato!", req.VehicleId, req.Eta)
 		}else{
