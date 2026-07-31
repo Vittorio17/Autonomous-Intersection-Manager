@@ -5,20 +5,59 @@ import (
 		"io"
 		"log"
 		"net"
+		"sync"
+
 		pb "github.com/Vittorio17/Autonomous-Intersection-Manager/proto"
 		"google.golang.org/grpc"
 )
+
+type VehicleState struct {
+	VehicleID string
+	Speed     float64
+	ETA       float64
+}
+
+// Database in memoria
+type VehicleRegistry struct {
+	mu       sync.Mutex
+	vehicles map[string]VehicleState
+}
+
+func (r *VehicleRegistry) UpdateVehicle(id string, speed float64, eta float64) {
+    r.mu.Lock()
+    defer r.mu.Unlock()
+    r.vehicles[id] = VehicleState{
+        VehicleID: id,
+        Speed:     speed,
+        ETA:       eta,
+    }
+}
+
+func (r *VehicleRegistry) RemoveVehicle(id string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.vehicles,id)
+}
 
 //Questo garantisce che se ci sono metodi in .proto non implementati qui,
 //il programma compili ugualmente, restituendo un messaggio NotImplemented
 type intersectionServer struct {
 	pb.UnimplementedIntersectionServiceServer
+	registry *VehicleRegistry
 }
 
 //Stream Bidirezionale
 func (s *intersectionServer) Negotiate(stream pb.IntersectionService_NegotiateServer) error {
 	fmt.Println("A new vehicle has connected to the intersection!")
 
+	var currentVehicleId string
+	//closure con defer. Questa scatterà SOLO quando la funzione Negotiate finisce.
+	defer func() {
+		if currentVehicleId != "" {
+			s.registry.RemoveVehicle(currentVehicleId)
+			log.Printf("Veicolo rimosso dal registro: %s", currentVehicleId)
+		}
+	}()
 	for{
 		req, err := stream.Recv()
 		if err == io.EOF{
@@ -35,6 +74,10 @@ func (s *intersectionServer) Negotiate(stream pb.IntersectionService_NegotiateSe
 			continue // Salta l'invio della risposta e torna a stream.Recv()
 		}
 
+		currentVehicleId = req.VehicleId
+		s.registry.UpdateVehicle(req.VehicleId, req.Speed, req.Eta)
+		log.Printf("Registro aggiornato per: %s", req.VehicleId)
+
 		fmt.Printf(
 			"Veichle Received: ID=%s, Speed=%.2f m/s, ETA=%.2f seconds\n",
 			req.VehicleId,
@@ -42,12 +85,12 @@ func (s *intersectionServer) Negotiate(stream pb.IntersectionService_NegotiateSe
 			req.Eta,
 		)
 		//Costruisce la risposta
-		response := &pb.ManagerResponse{
+		res := &pb.ManagerResponse{
 			VehicleId: req.VehicleId,
 			Status:    pb.CommandStatus_STATUS_ACK_LOCK,
 		}
 		//Invia la risposta
-		if err := stream.Send(response); err != nil {
+		if err := stream.Send(res); err != nil {
             log.Printf("Error sending response to %s: %v", req.VehicleId, err)
             return err
         }
@@ -64,10 +107,15 @@ func main(){
 	}	
 	//Crea il Server gRPC
 	grpcServer := grpc.NewServer()
+	server := &intersectionServer{
+		registry: &VehicleRegistry{
+			vehicles: make(map[string]VehicleState),
+		},
+	}
 	// Registra il servizio IntersectionService
     pb.RegisterIntersectionServiceServer(
         grpcServer,
-        &intersectionServer{},
+        server,
     )
 	log.Println("Intersection Manager listening on port 50051...")
 

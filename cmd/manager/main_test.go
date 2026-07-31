@@ -20,7 +20,11 @@ func init() {
     lis = bufconn.Listen(bufSize)
     s := grpc.NewServer()
     // Registriamo il server (intersectionServer definito in main.go)
-    pb.RegisterIntersectionServiceServer(s, &intersectionServer{})
+    pb.RegisterIntersectionServiceServer(s, &intersectionServer{
+		registry: &VehicleRegistry{
+			vehicles: make(map[string]VehicleState),
+		},
+	})
     
     // Avviamo il server in una Goroutine separata (in background)
     go func() {

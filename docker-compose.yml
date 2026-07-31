@@ -1,0 +1,20 @@
+services:
+  manager:
+    image: golang:1.26-alpine
+    working_dir: /app
+    volumes:
+      - .:/app
+    command: go run cmd/manager/main.go
+    ports:
+      - "50051:50051"
+
+  agent:
+    image: golang:1.26-alpine
+    working_dir: /app
+    volumes:
+      - .:/app
+    environment:
+      - MANAGER_ADDR=manager:50051 # <-- Nuova riga!
+    command: go run cmd/agent/main.go
+    depends_on:
+      - manager
