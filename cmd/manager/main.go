@@ -6,6 +6,7 @@ import (
 		"log"
 		"net"
 		"sync"
+		"math"
 
 		pb "github.com/Vittorio17/Autonomous-Intersection-Manager/proto"
 		"google.golang.org/grpc"
@@ -75,6 +76,15 @@ func (s *intersectionServer) Negotiate(stream pb.IntersectionService_NegotiateSe
 		}
 
 		currentVehicleId = req.VehicleId
+
+		var decision pb.CommandStatus
+
+		if(s.registry.HasConflict(req.VeihcleId,req.Eta)){
+			decision = pb.CommandStatus_STATUS_REJECT
+            log.Printf("ATTENZIONE: Conflitto rilevato per %s (ETA: %.2f). Rifiutato!", req.VehicleId, req.Eta)
+		}else{
+			decision = pb.CommandStatus_STATUS_ACK_LOCK
+		}
 		s.registry.UpdateVehicle(req.VehicleId, req.Speed, req.Eta)
 		log.Printf("Registro aggiornato per: %s", req.VehicleId)
 
@@ -87,7 +97,7 @@ func (s *intersectionServer) Negotiate(stream pb.IntersectionService_NegotiateSe
 		//Costruisce la risposta
 		res := &pb.ManagerResponse{
 			VehicleId: req.VehicleId,
-			Status:    pb.CommandStatus_STATUS_ACK_LOCK,
+			Status:    decision,
 		}
 		//Invia la risposta
 		if err := stream.Send(res); err != nil {
@@ -122,4 +132,21 @@ func main(){
     if err := grpcServer.Serve(lis); err != nil {
         log.Fatalf("Error starting server: %v", err)
     }
+}
+
+// Controlla se c'è un'auto con un ETA troppo vicino (meno di 2 secondi di differenza)
+func (r *VehicleRegistry) HasConflict(currentID string, newETA float64) bool {
+    safetyMargin := 2.0
+	r.mu.Lock()
+    defer r.mu.Unlock()
+    
+    for id,vehicle := range r.vehicles {
+		if (id==currentID) {continue}
+		diff := math.Abs(vehicle.ETA-newETA)
+		if(diff<safetyMargin){
+			//C'è una collisione
+			return true
+		}
+	}
+	return false
 }
