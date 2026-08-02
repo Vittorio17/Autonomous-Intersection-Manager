@@ -260,6 +260,7 @@ type ManagerResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	VehicleId     string                 `protobuf:"bytes,1,opt,name=vehicle_id,json=vehicleId,proto3" json:"vehicle_id,omitempty"`
 	Status        CommandStatus          `protobuf:"varint,2,opt,name=status,proto3,enum=intersection.CommandStatus" json:"status,omitempty"`
+	TargetEta     float64                `protobuf:"fixed64,3,opt,name=target_eta,json=targetEta,proto3" json:"target_eta,omitempty"` //L'istante di tempo suggerito dal Manager
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -308,6 +309,13 @@ func (x *ManagerResponse) GetStatus() CommandStatus {
 	return CommandStatus_STATUS_UNKNOW
 }
 
+func (x *ManagerResponse) GetTargetEta() float64 {
+	if x != nil {
+		return x.TargetEta
+	}
+	return 0
+}
+
 var File_proto_intersection_proto protoreflect.FileDescriptor
 
 const file_proto_intersection_proto_rawDesc = "" +
@@ -320,11 +328,13 @@ const file_proto_intersection_proto_rawDesc = "" +
 	"\x03eta\x18\x03 \x01(\x01R\x03eta\x123\n" +
 	"\vorigin_lane\x18\x04 \x01(\x0e2\x12.intersection.LaneR\n" +
 	"originLane\x125\n" +
-	"\tdirection\x18\x05 \x01(\x0e2\x17.intersection.DirectionR\tdirection\"e\n" +
+	"\tdirection\x18\x05 \x01(\x0e2\x17.intersection.DirectionR\tdirection\"\x84\x01\n" +
 	"\x0fManagerResponse\x12\x1d\n" +
 	"\n" +
 	"vehicle_id\x18\x01 \x01(\tR\tvehicleId\x123\n" +
-	"\x06status\x18\x02 \x01(\x0e2\x1b.intersection.CommandStatusR\x06status*V\n" +
+	"\x06status\x18\x02 \x01(\x0e2\x1b.intersection.CommandStatusR\x06status\x12\x1d\n" +
+	"\n" +
+	"target_eta\x18\x03 \x01(\x01R\ttargetEta*V\n" +
 	"\x04Lane\x12\x10\n" +
 	"\fLANE_UNKNOWN\x10\x00\x12\x0e\n" +
 	"\n" +

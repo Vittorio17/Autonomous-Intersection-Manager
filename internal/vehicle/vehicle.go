@@ -50,10 +50,10 @@ func Simulate(managerAddr string, vehicleID string, speed, distance float64, lan
         }
 
         if res.Status == pb.CommandStatus_STATUS_REJECT {
-            speed *= 0.8 // Frenata d'emergenza (20%)
-            log.Printf("[%s] REJECT! Rallento a %.2f m/s", vehicleID, speed)
+            // Calcoliamo la velocità esatta per arrivare nel time slot suggerito dal Manager.
+            speed = distance / res.TargetEta 
+            log.Printf("[%s] REJECT! Ricalcolo analitico: Nuovo ETA %.2fs -> Vel esatta: %.2f m/s", vehicleID, res.TargetEta, speed)
         }
-
         distance -= speed
         time.Sleep(1 * time.Second)
     }
