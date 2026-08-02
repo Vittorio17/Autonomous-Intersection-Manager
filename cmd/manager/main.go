@@ -107,13 +107,17 @@ func (s *intersectionServer) Negotiate(stream pb.IntersectionService_NegotiateSe
 
 		var decision pb.CommandStatus
 
-		if s.registry.HasConflict(req.VehicleId, req.Eta, req.OriginLane, req.Direction) {
+		hasConflict, suggestedETA := s.registry.CheckAndSuggestETA(req.VehicleId, req.Eta, req.OriginLane, req.Direction)
+
+		if hasConflict {
 			decision = pb.CommandStatus_STATUS_REJECT
-			log.Printf("ATTENZIONE: Conflitto rilevato per %s (ETA: %.2f). Rifiutato!", req.VehicleId, req.Eta)
+			log.Printf("ATTENZIONE: Conflitto per %s (ETA: %.2f). Suggerito nuovo ETA: %.2f", req.VehicleId, req.Eta, suggestedETA)
 		} else {
 			decision = pb.CommandStatus_STATUS_ACK_LOCK
 		}
-		s.registry.UpdateVehicle(req.VehicleId, req.Speed, req.Eta, req.OriginLane, req.Direction)
+
+		// Salva il veicolo con l'ETA reale
+		s.registry.UpdateVehicle(req.VehicleId, req.Speed, suggestedETA, req.OriginLane, req.Direction)
 
 		fmt.Printf(
 			"Veichle Received: ID=%s, Speed=%.2f m/s, ETA=%.2f seconds\n",
@@ -125,6 +129,7 @@ func (s *intersectionServer) Negotiate(stream pb.IntersectionService_NegotiateSe
 		res := &pb.ManagerResponse{
 			VehicleId: req.VehicleId,
 			Status:    decision,
+			TargetEta: suggestedETA,
 		}
 		//Invia la risposta
 		if err := stream.Send(res); err != nil {
@@ -161,21 +166,31 @@ func main(){
     }
 }
 
-// Controlla se c'è un'auto con traiettoria ed ETA troppo vicini
-func (r *VehicleRegistry) HasConflict(currentID string, newETA float64,lane pb.Lane, dir pb.Direction) bool {
+// CheckAndSuggestETA restituisce (true, nuovo_eta_sicuro) se c'è conflitto
+func (r *VehicleRegistry) CheckAndSuggestETA(currentID string, newETA float64, lane pb.Lane, dir pb.Direction) (bool, float64) {
     safetyMargin := 2.0
-	r.mu.Lock()
+    r.mu.Lock()
     defer r.mu.Unlock()
     
-    for id,vehicle := range r.vehicles {
-		if (id==currentID) {continue}
-		if arePathsConflicting(lane, dir, vehicle.OriginLane, vehicle.Direction) {
-            diff := math.Abs(vehicle.ETA - newETA)
-            if diff < safetyMargin {
-                // C'è una collisione
-                return true
+    hasConflict := false
+    targetETA := newETA
+    
+    conflictFound := true
+    // Loop finché non troviamo uno slot libero (Reservation Grid dinamica)
+    for conflictFound {
+        conflictFound = false
+        for id, vehicle := range r.vehicles {
+            if id == currentID { continue }
+            if arePathsConflicting(lane, dir, vehicle.OriginLane, vehicle.Direction) {
+                if math.Abs(vehicle.ETA - targetETA) < safetyMargin {
+                    hasConflict = true
+                    conflictFound = true
+                    //Lo slot è occupato: suggeriamo di passare DOPO quest'auto
+                    targetETA = vehicle.ETA + safetyMargin
+                    break // Ricomincia il controllo incrociato con il nuovo ETA
+                }
             }
         }
-	}
-	return false
+    }
+    return hasConflict, targetETA
 }

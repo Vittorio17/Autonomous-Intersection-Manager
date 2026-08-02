@@ -42,4 +42,5 @@ enum CommandStatus{
 message ManagerResponse{
     string vehicle_id = 1;
     CommandStatus status = 2;
+    double target_eta = 3; //L'istante di tempo suggerito dal Manager
 }
