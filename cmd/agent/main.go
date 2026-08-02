@@ -133,6 +133,13 @@ func main() {
         currentID := sim.ID
         currentSpeed := sim.Speed
         currentDistance := sim.Distance
+
+		originLaneStr := os.Getenv("ORIGIN_LANE")
+		directionStr := os.Getenv("DIRECTION")
+
+		originLane := parseLane(originLaneStr)
+		direction := parseDirection(directionStr)
+
         sim.mu.Unlock()
         
         // Crea il pacchetto Protobuf con i dati aggiornati
@@ -140,6 +147,8 @@ func main() {
             VehicleId: currentID,
             Speed:     currentSpeed,
             Eta:       eta,
+			OriginLane: originLane,
+			Direction: direction,
         }
 
         // Invia la telemetria al Manager
@@ -156,4 +165,23 @@ func main() {
     // Aspetta che la goroutine finisca di processare le ultime risposte
     <-waitc
 
+}
+
+func parseLane(laneStr string) pb.Lane {
+    switch laneStr {
+    case "NORTH": return pb.Lane_LANE_NORTH
+    case "SOUTH": return pb.Lane_LANE_SOUTH
+    case "EAST":  return pb.Lane_LANE_EAST
+    case "WEST":  return pb.Lane_LANE_WEST
+    default:      return pb.Lane_LANE_UNKNOWN
+    }
+}
+
+func parseDirection(dirStr string) pb.Direction {
+    switch dirStr {
+    case "STRAIGHT": return pb.Direction_DIR_STRAIGHT
+    case "LEFT":     return pb.Direction_DIR_LEFT
+    case "RIGHT":    return pb.Direction_DIR_RIGHT
+    default:         return pb.Direction_DIR_UNKNOWN
+    }
 }

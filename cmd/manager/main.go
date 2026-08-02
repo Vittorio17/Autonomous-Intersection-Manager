@@ -16,6 +16,32 @@ type VehicleState struct {
 	VehicleID string
 	Speed     float64
 	ETA       float64
+	OriginLane pb.Lane
+    Direction  pb.Direction
+}
+
+// arePathsConflicting restituisce 'true' se le traiettorie si incrociano fisicamente
+func arePathsConflicting(l1 pb.Lane, d1 pb.Direction, l2 pb.Lane, d2 pb.Direction) bool {
+    // Se provengono dalla stessa corsia, il conflitto temporale significa tamponamento
+    if l1 == l2 {
+        return true
+    }
+
+    // Helper per capire se due corsie sono opposte
+    isOpposite := (l1 == pb.Lane_LANE_NORTH && l2 == pb.Lane_LANE_SOUTH) ||
+                  (l1 == pb.Lane_LANE_SOUTH && l2 == pb.Lane_LANE_NORTH) ||
+                  (l1 == pb.Lane_LANE_EAST && l2 == pb.Lane_LANE_WEST) ||
+                  (l1 == pb.Lane_LANE_WEST && l2 == pb.Lane_LANE_EAST)
+
+    if isOpposite {
+        // Se sono su corsie opposte ed ENTRAMBE vanno dritte, le traiettorie sono parallele
+        if d1 == pb.Direction_DIR_STRAIGHT && d2 == pb.Direction_DIR_STRAIGHT {
+            return false
+        }
+    }
+
+    // Per tutte le altre combinazioni
+    return true
 }
 
 // Database in memoria
@@ -24,13 +50,15 @@ type VehicleRegistry struct {
 	vehicles map[string]VehicleState
 }
 
-func (r *VehicleRegistry) UpdateVehicle(id string, speed float64, eta float64) {
+func (r *VehicleRegistry) UpdateVehicle(id string, speed float64, eta float64, lane pb.Lane, dir pb.Direction) {
     r.mu.Lock()
     defer r.mu.Unlock()
     r.vehicles[id] = VehicleState{
         VehicleID: id,
         Speed:     speed,
         ETA:       eta,
+		OriginLane: lane,
+        Direction:  dir,
     }
 }
 
@@ -79,14 +107,13 @@ func (s *intersectionServer) Negotiate(stream pb.IntersectionService_NegotiateSe
 
 		var decision pb.CommandStatus
 
-		if(s.registry.HasConflict(req.VehicleId,req.Eta)){
+		if s.registry.HasConflict(req.VehicleId, req.Eta, req.OriginLane, req.Direction) {
 			decision = pb.CommandStatus_STATUS_REJECT
-            log.Printf("ATTENZIONE: Conflitto rilevato per %s (ETA: %.2f). Rifiutato!", req.VehicleId, req.Eta)
-		}else{
+			log.Printf("ATTENZIONE: Conflitto rilevato per %s (ETA: %.2f). Rifiutato!", req.VehicleId, req.Eta)
+		} else {
 			decision = pb.CommandStatus_STATUS_ACK_LOCK
 		}
-		s.registry.UpdateVehicle(req.VehicleId, req.Speed, req.Eta)
-		log.Printf("Registro aggiornato per: %s", req.VehicleId)
+		s.registry.UpdateVehicle(req.VehicleId, req.Speed, req.Eta, req.OriginLane, req.Direction)
 
 		fmt.Printf(
 			"Veichle Received: ID=%s, Speed=%.2f m/s, ETA=%.2f seconds\n",
@@ -134,19 +161,21 @@ func main(){
     }
 }
 
-// Controlla se c'è un'auto con un ETA troppo vicino (meno di 2 secondi di differenza)
-func (r *VehicleRegistry) HasConflict(currentID string, newETA float64) bool {
+// Controlla se c'è un'auto con traiettoria ed ETA troppo vicini
+func (r *VehicleRegistry) HasConflict(currentID string, newETA float64,lane pb.Lane, dir pb.Direction) bool {
     safetyMargin := 2.0
 	r.mu.Lock()
     defer r.mu.Unlock()
     
     for id,vehicle := range r.vehicles {
 		if (id==currentID) {continue}
-		diff := math.Abs(vehicle.ETA-newETA)
-		if(diff<safetyMargin){
-			//C'è una collisione
-			return true
-		}
+		if arePathsConflicting(lane, dir, vehicle.OriginLane, vehicle.Direction) {
+            diff := math.Abs(vehicle.ETA - newETA)
+            if diff < safetyMargin {
+                // C'è una collisione
+                return true
+            }
+        }
 	}
 	return false
 }

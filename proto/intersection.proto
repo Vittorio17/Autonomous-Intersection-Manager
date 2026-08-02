@@ -4,6 +4,21 @@ package intersection;
 
 option go_package = "github.com/Vittorio17/Autonomous-Intersection-Manager/proto";
 
+enum Lane {
+  LANE_UNKNOWN = 0; // Default di sicurezza in gRPC
+  LANE_NORTH = 1;
+  LANE_SOUTH = 2;
+  LANE_EAST = 3;
+  LANE_WEST = 4;
+}
+
+enum Direction {
+  DIR_UNKNOWN = 0;
+  DIR_STRAIGHT = 1;
+  DIR_LEFT = 2;
+  DIR_RIGHT = 3;
+}
+
 service IntersectionService{
     //Bidirectional stream with an open channel
     rpc Negotiate(stream VehicleRequest) returns (stream ManagerResponse);
@@ -12,7 +27,9 @@ service IntersectionService{
 message VehicleRequest{
     string vehicle_id = 1;
     double speed = 2; // m/s
-    double eta = 3; //Seconds estimate to arrive 
+    double eta = 3; //Seconds estimate to arrive
+    Lane origin_lane = 4;
+    Direction direction = 5;
 }
 
 enum CommandStatus{

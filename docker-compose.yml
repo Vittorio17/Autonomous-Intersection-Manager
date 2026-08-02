@@ -20,7 +20,9 @@ services:
       - MANAGER_ADDR=manager:50051
       - VEHICLE_ID=CAR_001
       - START_SPEED=50
-      - START_DISTANCE=500
+      - START_DISTANCE=500  # ETA: 10s
+      - ORIGIN_LANE=NORTH   # Da Nord
+      - DIRECTION=STRAIGHT  # Va dritto
     depends_on:
       - manager
 
@@ -35,7 +37,9 @@ services:
       - MANAGER_ADDR=manager:50051
       - VEHICLE_ID=CAR_002
       - START_SPEED=40
-      - START_DISTANCE=400
+      - START_DISTANCE=400  # ETA: 10s (Identico a CAR_001)
+      - ORIGIN_LANE=SOUTH   # Da Sud
+      - DIRECTION=STRAIGHT  # Va dritto
     depends_on:
       - manager
 
