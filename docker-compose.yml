@@ -1,20 +1,43 @@
 services:
   manager:
-    image: golang:1.26-alpine
-    working_dir: /app
+    image: golang:1.26
     volumes:
       - .:/app
+      - go-cache:/go/pkg/mod
+    working_dir: /app
     command: go run cmd/manager/main.go
     ports:
       - "50051:50051"
 
-  agent:
-    image: golang:1.26-alpine
-    working_dir: /app
+  agent-1:
+    image: golang:1.26
     volumes:
       - .:/app
-    environment:
-      - MANAGER_ADDR=manager:50051 # <-- Nuova riga!
+      - go-cache:/go/pkg/mod
+    working_dir: /app
     command: go run cmd/agent/main.go
+    environment:
+      - MANAGER_ADDR=manager:50051
+      - VEHICLE_ID=CAR_001
+      - START_SPEED=50
+      - START_DISTANCE=500
     depends_on:
       - manager
+
+  agent-2:
+    image: golang:1.26
+    volumes:
+      - .:/app
+      - go-cache:/go/pkg/mod
+    working_dir: /app
+    command: go run cmd/agent/main.go
+    environment:
+      - MANAGER_ADDR=manager:50051
+      - VEHICLE_ID=CAR_002
+      - START_SPEED=40
+      - START_DISTANCE=400
+    depends_on:
+      - manager
+
+volumes:
+  go-cache:

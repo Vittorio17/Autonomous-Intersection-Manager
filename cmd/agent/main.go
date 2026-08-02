@@ -7,7 +7,8 @@ import (
 	"os"
 	"sync"
 	"time"
-	
+	"strconv"
+
 	pb "github.com/Vittorio17/Autonomous-Intersection-Manager/proto"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -22,6 +23,8 @@ type VehicleSimulator struct {
 }
 
 func main() {
+	time.Sleep(2 * time.Second)
+	
 	// Legge l'indirizzo, se non c'è usa localhost come fallback per i test senza Docker
 	targetAddr := os.Getenv("MANAGER_ADDR")
     if targetAddr == "" {
@@ -32,18 +35,18 @@ func main() {
 
     conn, err := grpc.NewClient(targetAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 
-	// 1. Imposta la connessione client gRPC. 
-	// Usiamo insecure.NewCredentials() perché per ora non stiamo usando certificati SSL/TLS.
+	// Imposta la connessione client gRPC. 
+	// Usa insecure.NewCredentials() perché per ora non sta usando certificati SSL/TLS.
 	if err != nil {
 		log.Fatalf("Impossibile connettersi al server: %v", err)
 	}
 	// Garantisce che la connessione di rete venga chiusa quando il programma termina
 	defer conn.Close()
 
-	// 2. Inizializza il client generato da Protobuf
+	// Inizializza il client generato da Protobuf
 	client := pb.NewIntersectionServiceClient(conn)
 
-	// 3. Apre lo stream bidirezionale chiamando Negotiate()
+	// Apre lo stream bidirezionale chiamando Negotiate()
 	log.Println("Apertura dello stream bidirezionale in corso...")
 	stream, err := client.Negotiate(context.Background())
 	if err != nil {
@@ -52,11 +55,29 @@ func main() {
 
 	log.Println("Stream aperto con successo! Connessione stabilita.")
 
-	// Inizializziamo il nostro veicolo a 500 metri dall'incrocio, a 50 m/s
+	// Leggiamo le variabili d'ambiente passate da Docker
+	vID := os.Getenv("VEHICLE_ID")
+	if vID == "" { 
+		vID = "CAR_001" 
+	}
+
+	speedStr := os.Getenv("START_SPEED")
+	speed := 50.0
+	if speedStr != "" { 
+		speed, _ = strconv.ParseFloat(speedStr, 64) 
+	}
+
+	distStr := os.Getenv("START_DISTANCE")
+	dist := 500.0
+	if distStr != "" { 
+		dist, _ = strconv.ParseFloat(distStr, 64) 
+	}
+
+	// Inizializziamo il nostro veicolo con i parametri dinamici
 	sim := &VehicleSimulator{
-		ID:       "CAR_001",
-		Speed:    50.0,
-		Distance: 500.0,
+		ID:       vID,
+		Speed:    speed,
+		Distance: dist,
 	}
 
 	waitc := make(chan struct{})

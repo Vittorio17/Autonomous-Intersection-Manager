@@ -5,6 +5,7 @@ import (
     "net"
     "testing"
     "time"
+    "sync"
 
     pb "github.com/Vittorio17/Autonomous-Intersection-Manager/proto"
     "google.golang.org/grpc"
@@ -84,5 +85,74 @@ func TestEndToEndNegotiation(t *testing.T) {
 
     if res.VehicleId != req.VehicleId {
         t.Errorf("TEST FALLITO: L'ID veicolo non corrisponde. Inviato %s, ricevuto %s", req.VehicleId, res.VehicleId)
+    }
+}
+
+func TestConcurrentNegotiation(t *testing.T) {
+    // 1. Avvia il server su una porta di test
+    lis, err := net.Listen("tcp", ":50052")
+    if err != nil {
+        t.Fatalf("Impossibile aprire la porta: %v", err)
+    }
+    
+    grpcServer := grpc.NewServer()
+    server := &intersectionServer{
+        registry: &VehicleRegistry{
+            vehicles: make(map[string]VehicleState),
+        },
+    }
+    pb.RegisterIntersectionServiceServer(grpcServer, server)
+    
+    go func() {
+        grpcServer.Serve(lis)
+    }()
+    defer grpcServer.Stop()
+
+    // Aspetta che il server sia pronto
+    time.Sleep(100 * time.Millisecond)
+
+    // 2. Connetti due client simultanei
+    conn, err := grpc.NewClient("localhost:50052", grpc.WithTransportCredentials(insecure.NewCredentials()))
+    if err != nil {
+        t.Fatalf("Errore di connessione: %v", err)
+    }
+    defer conn.Close()
+
+    client := pb.NewIntersectionServiceClient(conn)
+
+    var wg sync.WaitGroup
+    wg.Add(2)
+
+    // Variabili per raccogliere le risposte
+    var status1, status2 pb.CommandStatus
+
+    // 3. Lancia CAR_1
+    go func() {
+        defer wg.Done()
+        stream, _ := client.Negotiate(context.Background())
+        stream.Send(&pb.VehicleRequest{VehicleId: "CAR_1", Speed: 50.0, Eta: 10.0})
+        res, _ := stream.Recv()
+        status1 = res.Status
+        stream.CloseSend()
+    }()
+
+    // 4. Lancia CAR_2 nello stesso istante (stesso ETA!)
+    go func() {
+        defer wg.Done()
+        stream, _ := client.Negotiate(context.Background())
+        stream.Send(&pb.VehicleRequest{VehicleId: "CAR_2", Speed: 40.0, Eta: 10.0})
+        res, _ := stream.Recv()
+        status2 = res.Status
+        stream.CloseSend()
+    }()
+
+    // Aspetta che entrambe abbiano finito
+    wg.Wait()
+
+    // 5. Verifica che una sia passata e una sia stata respinta!
+    if status1 == status2 {
+        t.Errorf("Entrambe le auto hanno ricevuto lo stesso stato (%v)! La logica anti-collisione ha fallito.", status1)
+    } else {
+        t.Logf("Successo! Auto 1 ha ricevuto: %v, Auto 2 ha ricevuto: %v", status1, status2)
     }
 }
