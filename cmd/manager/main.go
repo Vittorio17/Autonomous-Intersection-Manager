@@ -50,22 +50,48 @@ type VehicleRegistry struct {
 	vehicles map[string]VehicleState
 }
 
-func (r *VehicleRegistry) UpdateVehicle(id string, speed float64, eta float64, lane pb.Lane, dir pb.Direction) {
-    r.mu.Lock()
-    defer r.mu.Unlock()
-    r.vehicles[id] = VehicleState{
-        VehicleID: id,
-        Speed:     speed,
-        ETA:       eta,
-		OriginLane: lane,
-        Direction:  dir,
-    }
-}
-
 func (r *VehicleRegistry) RemoveVehicle(id string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	delete(r.vehicles,id)
+	delete(r.vehicles, id)
+}
+
+// ReserveOrSuggest controlla atomicamente la disponibilità dello slot e lo prenota se libero.
+// Restituisce (status, targetETA). Se lo slot è libero, restituisce STATUS_ACK_LOCK e prenota il veicolo.
+// Se c'è conflitto, restituisce STATUS_REJECT con il nuovo ETA suggerito.
+func (r *VehicleRegistry) ReserveOrSuggest(id string, speed float64, newETA float64, lane pb.Lane, dir pb.Direction) (pb.CommandStatus, float64) {
+	safetyMargin := 2.0
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	targetETA := newETA
+	conflictFound := true
+
+	for conflictFound {
+		conflictFound = false
+		for _, vehicle := range r.vehicles {
+			if arePathsConflicting(lane, dir, vehicle.OriginLane, vehicle.Direction) {
+				if math.Abs(vehicle.ETA - targetETA) < safetyMargin {
+					conflictFound = true
+					targetETA = vehicle.ETA + safetyMargin
+					break
+				}
+			}
+		}
+	}
+
+	if targetETA == newETA {
+		r.vehicles[id] = VehicleState{
+			VehicleID:   id,
+			Speed:       speed,
+			ETA:         targetETA,
+			OriginLane:  lane,
+			Direction:   dir,
+		}
+		return pb.CommandStatus_STATUS_ACK_LOCK, targetETA
+	}
+
+	return pb.CommandStatus_STATUS_REJECT, targetETA
 }
 
 //Questo garantisce che se ci sono metodi in .proto non implementati qui,
@@ -105,19 +131,11 @@ func (s *intersectionServer) Negotiate(stream pb.IntersectionService_NegotiateSe
 
 		currentVehicleId = req.VehicleId
 
-		var decision pb.CommandStatus
+		decision, suggestedETA := s.registry.ReserveOrSuggest(req.VehicleId, req.Speed, req.Eta, req.OriginLane, req.Direction)
 
-		hasConflict, suggestedETA := s.registry.CheckAndSuggestETA(req.VehicleId, req.Eta, req.OriginLane, req.Direction)
-
-		if hasConflict {
-			decision = pb.CommandStatus_STATUS_REJECT
+		if decision == pb.CommandStatus_STATUS_REJECT {
 			log.Printf("ATTENZIONE: Conflitto per %s (ETA: %.2f). Suggerito nuovo ETA: %.2f", req.VehicleId, req.Eta, suggestedETA)
-		} else {
-			decision = pb.CommandStatus_STATUS_ACK_LOCK
 		}
-
-		// Salva il veicolo con l'ETA reale
-		s.registry.UpdateVehicle(req.VehicleId, req.Speed, suggestedETA, req.OriginLane, req.Direction)
 
 		fmt.Printf(
 			"Veichle Received: ID=%s, Speed=%.2f m/s, ETA=%.2f seconds\n",
@@ -164,33 +182,4 @@ func main(){
     if err := grpcServer.Serve(lis); err != nil {
         log.Fatalf("Error starting server: %v", err)
     }
-}
-
-// CheckAndSuggestETA restituisce (true, nuovo_eta_sicuro) se c'è conflitto
-func (r *VehicleRegistry) CheckAndSuggestETA(currentID string, newETA float64, lane pb.Lane, dir pb.Direction) (bool, float64) {
-    safetyMargin := 2.0
-    r.mu.Lock()
-    defer r.mu.Unlock()
-    
-    hasConflict := false
-    targetETA := newETA
-    
-    conflictFound := true
-    // Loop finché non troviamo uno slot libero (Reservation Grid dinamica)
-    for conflictFound {
-        conflictFound = false
-        for id, vehicle := range r.vehicles {
-            if id == currentID { continue }
-            if arePathsConflicting(lane, dir, vehicle.OriginLane, vehicle.Direction) {
-                if math.Abs(vehicle.ETA - targetETA) < safetyMargin {
-                    hasConflict = true
-                    conflictFound = true
-                    //Lo slot è occupato: suggeriamo di passare DOPO quest'auto
-                    targetETA = vehicle.ETA + safetyMargin
-                    break // Ricomincia il controllo incrociato con il nuovo ETA
-                }
-            }
-        }
-    }
-    return hasConflict, targetETA
 }

@@ -2,6 +2,7 @@ package main
 
 import (
     "context"
+    "fmt"
     "net"
     "testing"
     "time"
@@ -86,6 +87,57 @@ func TestEndToEndNegotiation(t *testing.T) {
     if res.VehicleId != req.VehicleId {
         t.Errorf("TEST FALLITO: L'ID veicolo non corrisponde. Inviato %s, ricevuto %s", req.VehicleId, res.VehicleId)
     }
+}
+
+func TestReserveOrSuggestConcurrentSameSlot(t *testing.T) {
+	registry := &VehicleRegistry{
+		vehicles: make(map[string]VehicleState),
+	}
+
+	const numGoroutines = 10
+	var wg sync.WaitGroup
+	wg.Add(numGoroutines)
+
+	results := make(chan struct {
+		id     string
+		status pb.CommandStatus
+		eta    float64
+	}, numGoroutines)
+
+	// Tutti i goroutine tentano di prenotare lo stesso ETA (10.0) sulla stessa corsia
+	for i := 0; i < numGoroutines; i++ {
+		go func(n int) {
+			defer wg.Done()
+			id := fmt.Sprintf("CAR_%d", n)
+			status, eta := registry.ReserveOrSuggest(id, 30.0, 10.0, pb.Lane_LANE_NORTH, pb.Direction_DIR_STRAIGHT)
+			results <- struct {
+				id     string
+				status pb.CommandStatus
+				eta    float64
+			}{id, status, eta}
+		}(i)
+	}
+
+	wg.Wait()
+	close(results)
+
+	ackCount := 0
+	rejectCount := 0
+	for r := range results {
+		if r.status == pb.CommandStatus_STATUS_ACK_LOCK {
+			ackCount++
+		} else if r.status == pb.CommandStatus_STATUS_REJECT {
+			rejectCount++
+		}
+	}
+
+	// Solo UNO deve ricevere ACK_LOCK, tutti gli altri REJECT
+	if ackCount != 1 {
+		t.Errorf("Esattamente un veicolo deve ricevere ACK_LOCK, ne hanno ricevuti %d", ackCount)
+	}
+	if rejectCount != numGoroutines-1 {
+		t.Errorf("%d veicoli devono ricevere REJECT, ne hanno ricevuti %d", numGoroutines-1, rejectCount)
+	}
 }
 
 func TestConcurrentNegotiation(t *testing.T) {
