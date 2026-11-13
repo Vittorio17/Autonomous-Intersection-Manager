@@ -1,38 +1,41 @@
 package main
 
 import (
-    "fmt"
-    "log"
-    "math/rand"
-    "os"
-    "time"
+	"fmt"
+	"log/slog"
+	"math/rand"
+	"os"
+	"time"
 
-    "github.com/Vittorio17/Autonomous-Intersection-Manager/internal/vehicle"
-    pb "github.com/Vittorio17/Autonomous-Intersection-Manager/proto"
+	"github.com/Vittorio17/Autonomous-Intersection-Manager/internal/logger"
+	"github.com/Vittorio17/Autonomous-Intersection-Manager/internal/vehicle"
+	pb "github.com/Vittorio17/Autonomous-Intersection-Manager/proto"
 )
 
 func randomLane() pb.Lane {
-    lanes := []pb.Lane{pb.Lane_LANE_NORTH, pb.Lane_LANE_SOUTH, pb.Lane_LANE_EAST, pb.Lane_LANE_WEST}
-    return lanes[rand.Intn(len(lanes))]
+	lanes := []pb.Lane{pb.Lane_LANE_NORTH, pb.Lane_LANE_SOUTH, pb.Lane_LANE_EAST, pb.Lane_LANE_WEST}
+	return lanes[rand.Intn(len(lanes))]
 }
 
 func randomDirection() pb.Direction {
-    dirs := []pb.Direction{pb.Direction_DIR_STRAIGHT, pb.Direction_DIR_LEFT, pb.Direction_DIR_RIGHT}
-    return dirs[rand.Intn(len(dirs))]
+	dirs := []pb.Direction{pb.Direction_DIR_STRAIGHT, pb.Direction_DIR_LEFT, pb.Direction_DIR_RIGHT}
+	return dirs[rand.Intn(len(dirs))]
 }
 
 func main() {
-    time.Sleep(2 * time.Second) // Aspetta il Manager
-    rand.Seed(time.Now().UnixNano()) // Inizializza il generatore casuale
+	logger.Init("traffic-spawner")
+	time.Sleep(2 * time.Second) // Aspetta il Manager
 
-    managerAddr := os.Getenv("MANAGER_ADDR")
-    if managerAddr == "" {
-        managerAddr = "localhost:50051"
-    }
+	managerAddr := os.Getenv("MANAGER_ADDR")
+	if managerAddr == "" {
+		managerAddr = "localhost:50051"
+	}
 
-    log.Println("Traffic Spawner avviato. Generazione traffico in corso...")
+	slog.Info("Traffic Spawner avviato, generazione traffico in corso",
+		slog.String("manager_addr", managerAddr),
+	)
 
-    carCount := 1
+	carCount := 1
 	for {
 		isEmergency := rand.Float64() < 0.10 // 10% di probabilità di veicolo di emergenza
 
