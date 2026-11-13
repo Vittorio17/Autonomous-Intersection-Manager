@@ -30,6 +30,7 @@ message VehicleRequest{
     double eta = 3; //Seconds estimate to arrive
     Lane origin_lane = 4;
     Direction direction = 5;
+    bool is_emergency = 6;
 }
 
 enum CommandStatus{

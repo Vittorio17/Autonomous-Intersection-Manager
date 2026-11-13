@@ -37,6 +37,7 @@ func main() {
     distance, _ := strconv.ParseFloat(os.Getenv("START_DISTANCE"), 64)
     lane := parseLane(os.Getenv("ORIGIN_LANE"))
     dir := parseDirection(os.Getenv("DIRECTION"))
+    isEmergency, _ := strconv.ParseBool(os.Getenv("IS_EMERGENCY"))
 
     if managerAddr == "" { managerAddr = "localhost:50051" }
     if vehicleID == "" { vehicleID = "CAR_MANUAL" }
@@ -44,5 +45,5 @@ func main() {
     if distance == 0 { distance = 400.0 }
 
     // Usa il modulo condiviso (in modo sincrono)
-    vehicle.Simulate(managerAddr, vehicleID, speed, distance, lane, dir)
+    vehicle.Simulate(managerAddr, vehicleID, speed, distance, lane, dir, isEmergency)
 }

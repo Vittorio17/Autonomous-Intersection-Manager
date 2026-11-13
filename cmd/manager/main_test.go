@@ -109,7 +109,14 @@ func TestReserveOrSuggestConcurrentSameSlot(t *testing.T) {
 		go func(n int) {
 			defer wg.Done()
 			id := fmt.Sprintf("CAR_%d", n)
-			status, eta := registry.ReserveOrSuggest(id, 30.0, 10.0, pb.Lane_LANE_NORTH, pb.Direction_DIR_STRAIGHT)
+			req := &pb.VehicleRequest{
+                VehicleId:  id,
+                Speed:      30.0,
+                Eta:        10.0,
+                OriginLane: pb.Lane_LANE_NORTH,
+                Direction:  pb.Direction_DIR_STRAIGHT,
+            }
+            status, eta := registry.ReserveOrSuggest(req, nil)
 			results <- struct {
 				id     string
 				status pb.CommandStatus
@@ -139,6 +146,7 @@ func TestReserveOrSuggestConcurrentSameSlot(t *testing.T) {
 		t.Errorf("%d veicoli devono ricevere REJECT, ne hanno ricevuti %d", numGoroutines-1, rejectCount)
 	}
 }
+
 
 func TestConcurrentNegotiation(t *testing.T) {
     // 1. Avvia il server su una porta di test
@@ -207,4 +215,76 @@ func TestConcurrentNegotiation(t *testing.T) {
     } else {
         t.Logf("Successo! Auto 1 ha ricevuto: %v, Auto 2 ha ricevuto: %v", status1, status2)
     }
+}
+
+func TestMultiTickSameVehicleNoSelfConflict(t *testing.T) {
+	registry := &VehicleRegistry{
+		vehicles: make(map[string]VehicleState),
+	}
+
+	// Simula lo stesso veicolo su 3 tick consecutivi mentre si avvicina
+	etas := []float64{6.0, 5.0, 4.0}
+	for tick, eta := range etas {
+		req := &pb.VehicleRequest{
+			VehicleId:  "CAR_MULTITICK",
+			Speed:      20.0,
+			Eta:        eta,
+			OriginLane: pb.Lane_LANE_NORTH,
+			Direction:  pb.Direction_DIR_STRAIGHT,
+		}
+		status, targetETA := registry.ReserveOrSuggest(req, nil)
+		if status != pb.CommandStatus_STATUS_ACK_LOCK {
+			t.Fatalf("Tick %d (ETA %.1f): atteso ACK_LOCK, ottenuto %v (suggerito %.1f)", tick, eta, status, targetETA)
+		}
+	}
+}
+
+func TestEmergencyVehiclePreemption(t *testing.T) {
+	registry := &VehicleRegistry{
+		vehicles: make(map[string]VehicleState),
+	}
+
+	// Canale simulato del veicolo ordinario per ricevere il push asincrono
+	ordinaryCh := make(chan *pb.ManagerResponse, 4)
+
+	// 1. Un veicolo ordinario prenota lo slot a ETA = 5.0s da Nord -> Dritto
+	ordReq := &pb.VehicleRequest{
+		VehicleId:   "ORDINARY_01",
+		Speed:       20.0,
+		Eta:         5.0,
+		OriginLane:  pb.Lane_LANE_NORTH,
+		Direction:   pb.Direction_DIR_STRAIGHT,
+		IsEmergency: false,
+	}
+	status, _ := registry.ReserveOrSuggest(ordReq, ordinaryCh)
+	if status != pb.CommandStatus_STATUS_ACK_LOCK {
+		t.Fatalf("Veicolo ordinario doveva ottenere ACK_LOCK, ottenuto %v", status)
+	}
+
+	// 2. Arriva un'ambulanza da Est -> Dritto (traiettoria in conflitto) con lo stesso ETA = 5.0s
+	ambReq := &pb.VehicleRequest{
+		VehicleId:   "AMBULANCE_01",
+		Speed:       30.0,
+		Eta:         5.0,
+		OriginLane:  pb.Lane_LANE_EAST,
+		Direction:   pb.Direction_DIR_STRAIGHT,
+		IsEmergency: true,
+	}
+	ambStatus, ambETA := registry.ReserveOrSuggest(ambReq, nil)
+	if ambStatus != pb.CommandStatus_STATUS_ACK_LOCK || ambETA != 5.0 {
+		t.Fatalf("Ambulanza doveva ottenere ACK_LOCK immediato a 5.0s, ottenuto %v (ETA %.1f)", ambStatus, ambETA)
+	}
+
+	// 3. Verifica che il veicolo ordinario abbia ricevuto la notifica push STATUS_ADJUST_SPEED
+	select {
+	case pushMsg := <-ordinaryCh:
+		if pushMsg.Status != pb.CommandStatus_STATUS_ADJUST_SPEED {
+			t.Errorf("Atteso STATUS_ADJUST_SPEED per il veicolo ordinario, ottenuto %v", pushMsg.Status)
+		}
+		if pushMsg.TargetEta != 7.0 {
+			t.Errorf("Atteso nuovo TargetEta = 7.0s per il veicolo ordinario, ottenuto %.1f", pushMsg.TargetEta)
+		}
+	default:
+		t.Fatal("Il veicolo ordinario non ha ricevuto nessuna notifica di riallocazione slot")
+	}
 }
