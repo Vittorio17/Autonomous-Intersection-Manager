@@ -20,30 +20,6 @@ type VehicleState struct {
     Direction  pb.Direction
 }
 
-// arePathsConflicting restituisce 'true' se le traiettorie si incrociano fisicamente
-func arePathsConflicting(l1 pb.Lane, d1 pb.Direction, l2 pb.Lane, d2 pb.Direction) bool {
-    // Se provengono dalla stessa corsia, il conflitto temporale significa tamponamento
-    if l1 == l2 {
-        return true
-    }
-
-    // Helper per capire se due corsie sono opposte
-    isOpposite := (l1 == pb.Lane_LANE_NORTH && l2 == pb.Lane_LANE_SOUTH) ||
-                  (l1 == pb.Lane_LANE_SOUTH && l2 == pb.Lane_LANE_NORTH) ||
-                  (l1 == pb.Lane_LANE_EAST && l2 == pb.Lane_LANE_WEST) ||
-                  (l1 == pb.Lane_LANE_WEST && l2 == pb.Lane_LANE_EAST)
-
-    if isOpposite {
-        // Se sono su corsie opposte ed ENTRAMBE vanno dritte, le traiettorie sono parallele
-        if d1 == pb.Direction_DIR_STRAIGHT && d2 == pb.Direction_DIR_STRAIGHT {
-            return false
-        }
-    }
-
-    // Per tutte le altre combinazioni
-    return true
-}
-
 // Database in memoria
 type VehicleRegistry struct {
 	mu       sync.Mutex
