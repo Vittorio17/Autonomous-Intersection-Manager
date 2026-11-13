@@ -33,17 +33,24 @@ func main() {
     log.Println("Traffic Spawner avviato. Generazione traffico in corso...")
 
     carCount := 1
-    for {
-        vehicleID := fmt.Sprintf("CAR_%03d", carCount)
-        speed := 30.0 + rand.Float64()*20.0      // 30 - 50 m/s
-        distance := 300.0 + rand.Float64()*200.0 // 300 - 500 m
-        lane := randomLane()
-        dir := randomDirection()
+	for {
+		isEmergency := rand.Float64() < 0.10 // 10% di probabilità di veicolo di emergenza
 
-        // Lancia il veicolo come Goroutine usando il modulo condiviso
-        go vehicle.Simulate(managerAddr, vehicleID, speed, distance, lane, dir)
+		prefix := "CAR"
+		if isEmergency {
+			prefix = "AMB"
+		}
+		vehicleID := fmt.Sprintf("%s_%03d", prefix, carCount)
 
-        carCount++
-        time.Sleep(1500 * time.Millisecond) // Auto ogni 1.5 secondi
-    }
+		speed := 30.0 + rand.Float64()*20.0      // 30 - 50 m/s
+		distance := 300.0 + rand.Float64()*200.0 // 300 - 500 m
+		lane := randomLane()
+		dir := randomDirection()
+
+		// Lancia il veicolo come Goroutine usando il modulo condiviso
+		go vehicle.Simulate(managerAddr, vehicleID, speed, distance, lane, dir, isEmergency)
+
+		carCount++
+		time.Sleep(1500 * time.Millisecond) // Auto ogni 1.5 secondi
+	}
 }

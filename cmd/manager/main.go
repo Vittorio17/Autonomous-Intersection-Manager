@@ -1,26 +1,35 @@
 package main
 
 import (
-		"fmt"
-		"io"
-		"log"
-		"net"
-		"sync"
-		"math"
+	"fmt"
+	"io"
+	"log"
+	"math"
+	"net"
+	"sync"
 
-		pb "github.com/Vittorio17/Autonomous-Intersection-Manager/proto"
-		"google.golang.org/grpc"
+	pb "github.com/Vittorio17/Autonomous-Intersection-Manager/proto"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+)
+
+const (
+	safetyGapSec     = 2.0 // Distanza temporale minima tra due veicoli in conflitto
+	commitHorizonSec = 1.5 // Oltre questa soglia il veicolo è troppo vicino per frenare in sicurezza
 )
 
 type VehicleState struct {
-	VehicleID string
-	Speed     float64
-	ETA       float64
-	OriginLane pb.Lane
-    Direction  pb.Direction
+	VehicleID   string
+	Speed       float64
+	ETA         float64
+	OriginLane  pb.Lane
+	Direction   pb.Direction
+	IsEmergency bool
+	NotifyCh    chan *pb.ManagerResponse // Canale thread-safe per invii sullo stream del veicolo
 }
 
-// Database in memoria
+// VehicleRegistry mantiene le prenotazioni attive in memoria
 type VehicleRegistry struct {
 	mu       sync.Mutex
 	vehicles map[string]VehicleState
@@ -32,37 +41,87 @@ func (r *VehicleRegistry) RemoveVehicle(id string) {
 	delete(r.vehicles, id)
 }
 
-// ReserveOrSuggest controlla atomicamente la disponibilità dello slot e lo prenota se libero.
-// Restituisce (status, targetETA). Se lo slot è libero, restituisce STATUS_ACK_LOCK e prenota il veicolo.
-// Se c'è conflitto, restituisce STATUS_REJECT con il nuovo ETA suggerito.
-func (r *VehicleRegistry) ReserveOrSuggest(id string, speed float64, newETA float64, lane pb.Lane, dir pb.Direction) (pb.CommandStatus, float64) {
-	safetyMargin := 2.0
+// ReserveOrSuggest valuta la richiesta, gestisce la preemption per i veicoli di emergenza
+// e salva/aggiorna lo stato nel registry in modo atomico.
+func (r *VehicleRegistry) ReserveOrSuggest(req *pb.VehicleRequest, notifyCh chan *pb.ManagerResponse) (pb.CommandStatus, float64) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	targetETA := newETA
-	conflictFound := true
+	targetETA := req.Eta
 
-	for conflictFound {
-		conflictFound = false
-		for _, vehicle := range r.vehicles {
-			if arePathsConflicting(lane, dir, vehicle.OriginLane, vehicle.Direction) {
-				if math.Abs(vehicle.ETA - targetETA) < safetyMargin {
-					conflictFound = true
-					targetETA = vehicle.ETA + safetyMargin
+	if req.IsEmergency {
+		// 1. Verifica che nessun veicolo ordinario sia già nella zona di non-ritorno (commitHorizonSec)
+		//    o che non ci sia un altro veicolo di emergenza in conflitto.
+		for {
+			shifted := false
+			for id, v := range r.vehicles {
+				if id == req.VehicleId {
+					continue
+				}
+				if arePathsConflicting(req.OriginLane, req.Direction, v.OriginLane, v.Direction) {
+					if math.Abs(v.ETA-targetETA) < safetyGapSec {
+						if v.IsEmergency || v.ETA <= commitHorizonSec {
+							targetETA = v.ETA + safetyGapSec
+							shifted = true
+							break
+						}
+					}
+				}
+			}
+			if !shifted {
+				break
+			}
+		}
+
+		// 2. Sposta i veicoli ordinari in conflitto (preemption)
+		r.preemptConflictingVehicles(req, targetETA)
+
+		// 3. Salva o aggiorna il veicolo di emergenza nel registry
+		r.vehicles[req.VehicleId] = VehicleState{
+			VehicleID:   req.VehicleId,
+			Speed:       req.Speed,
+			ETA:         targetETA,
+			OriginLane:  req.OriginLane,
+			Direction:   req.Direction,
+			IsEmergency: true,
+			NotifyCh:    notifyCh,
+		}
+
+		if math.Abs(targetETA-req.Eta) < 1e-6 {
+			return pb.CommandStatus_STATUS_ACK_LOCK, targetETA
+		}
+		return pb.CommandStatus_STATUS_REJECT, targetETA
+	}
+
+	// --- FLUSSO VEICOLO ORDINARIO ---
+	for {
+		shifted := false
+		for id, v := range r.vehicles {
+			if id == req.VehicleId {
+				continue // Evita auto-conflitto sui tick successivi
+			}
+			if arePathsConflicting(req.OriginLane, req.Direction, v.OriginLane, v.Direction) {
+				if math.Abs(v.ETA-targetETA) < safetyGapSec {
+					targetETA = v.ETA + safetyGapSec
+					shifted = true
 					break
 				}
 			}
 		}
+		if !shifted {
+			break
+		}
 	}
 
-	if targetETA == newETA {
-		r.vehicles[id] = VehicleState{
-			VehicleID:   id,
-			Speed:       speed,
+	if math.Abs(targetETA-req.Eta) < 1e-6 {
+		r.vehicles[req.VehicleId] = VehicleState{
+			VehicleID:   req.VehicleId,
+			Speed:       req.Speed,
 			ETA:         targetETA,
-			OriginLane:  lane,
-			Direction:   dir,
+			OriginLane:  req.OriginLane,
+			Direction:   req.Direction,
+			IsEmergency: false,
+			NotifyCh:    notifyCh,
 		}
 		return pb.CommandStatus_STATUS_ACK_LOCK, targetETA
 	}
@@ -70,92 +129,135 @@ func (r *VehicleRegistry) ReserveOrSuggest(id string, speed float64, newETA floa
 	return pb.CommandStatus_STATUS_REJECT, targetETA
 }
 
-//Questo garantisce che se ci sono metodi in .proto non implementati qui,
-//il programma compili ugualmente, restituendo un messaggio NotImplemented
+func (r *VehicleRegistry) preemptConflictingVehicles(emergReq *pb.VehicleRequest, emergETA float64) {
+	for id, v := range r.vehicles {
+		if id == emergReq.VehicleId || v.IsEmergency {
+			continue
+		}
+		if arePathsConflicting(emergReq.OriginLane, emergReq.Direction, v.OriginLane, v.Direction) {
+			if math.Abs(v.ETA-emergETA) < safetyGapSec {
+				newETA := emergETA + safetyGapSec
+				v.ETA = newETA
+				r.vehicles[id] = v
+
+				if v.NotifyCh != nil {
+					select {
+					case v.NotifyCh <- &pb.ManagerResponse{
+						VehicleId: v.VehicleID,
+						Status:    pb.CommandStatus_STATUS_ADJUST_SPEED,
+						TargetEta: newETA,
+					}:
+					default:
+						log.Printf("Canale notifiche pieno per %s, aggiornamento saltato", v.VehicleID)
+					}
+				}
+			}
+		}
+	}
+}
+
 type intersectionServer struct {
 	pb.UnimplementedIntersectionServiceServer
 	registry *VehicleRegistry
 }
 
-//Stream Bidirezionale
 func (s *intersectionServer) Negotiate(stream pb.IntersectionService_NegotiateServer) error {
-	fmt.Println("A new vehicle has connected to the intersection!")
+	log.Println("A new vehicle has connected to the intersection!")
 
-	var currentVehicleId string
-	//closure con defer. Questa scatterà SOLO quando la funzione Negotiate finisce.
+	var currentVehicleID string
 	defer func() {
-		if currentVehicleId != "" {
-			s.registry.RemoveVehicle(currentVehicleId)
-			log.Printf("Veicolo rimosso dal registro: %s", currentVehicleId)
+		if currentVehicleID != "" {
+			s.registry.RemoveVehicle(currentVehicleID)
+			log.Printf("Veicolo rimosso dal registro: %s", currentVehicleID)
 		}
 	}()
-	for{
+
+	// Canale unico di invio per questo stream (garantisce che stream.Send non sia mai chiamato concorrentemente)
+	sendCh := make(chan *pb.ManagerResponse, 16)
+	doneCh := make(chan struct{})
+	defer close(doneCh)
+
+	go func() {
+		for {
+			select {
+			case msg := <-sendCh:
+				if err := stream.Send(msg); err != nil {
+					return
+				}
+			case <-doneCh:
+				return
+			}
+		}
+	}()
+
+	for {
 		req, err := stream.Recv()
-		if err == io.EOF{
+		if err == io.EOF {
 			return nil
 		}
 		if err != nil {
-			log.Printf("Error receiving request: %v",err)
+			if status.Code(err) == codes.Canceled {
+				return nil
+			}
+			log.Printf("Error receiving request: %v", err)
 			return err
 		}
 
-		//Validazione dati di ingresso
+		// Validazione dati di ingresso
 		if req.VehicleId == "" || req.Speed < 0 || req.Eta < 0 {
 			log.Printf("WARNING: Malformed package discarded. ID='%s', Speed=%.2f, ETA=%.2f", req.VehicleId, req.Speed, req.Eta)
-			continue // Salta l'invio della risposta e torna a stream.Recv()
+			continue
 		}
 
-		currentVehicleId = req.VehicleId
+		currentVehicleID = req.VehicleId
 
-		decision, suggestedETA := s.registry.ReserveOrSuggest(req.VehicleId, req.Speed, req.Eta, req.OriginLane, req.Direction)
+		decision, suggestedETA := s.registry.ReserveOrSuggest(req, sendCh)
 
 		if decision == pb.CommandStatus_STATUS_REJECT {
 			log.Printf("ATTENZIONE: Conflitto per %s (ETA: %.2f). Suggerito nuovo ETA: %.2f", req.VehicleId, req.Eta, suggestedETA)
 		}
 
 		fmt.Printf(
-			"Veichle Received: ID=%s, Speed=%.2f m/s, ETA=%.2f seconds\n",
+			"Veichle Received: ID=%s, Speed=%.2f m/s, ETA=%.2f seconds (Emergency=%v)\n",
 			req.VehicleId,
 			req.Speed,
 			req.Eta,
+			req.IsEmergency,
 		)
-		//Costruisce la risposta
+
 		res := &pb.ManagerResponse{
 			VehicleId: req.VehicleId,
 			Status:    decision,
 			TargetEta: suggestedETA,
 		}
-		//Invia la risposta
-		if err := stream.Send(res); err != nil {
-            log.Printf("Error sending response to %s: %v", req.VehicleId, err)
-            return err
-        }
+
+		select {
+		case sendCh <- res:
+		case <-doneCh:
+			return nil
+		}
 	}
 }
 
-func main(){
+func main() {
 	fmt.Println("Running the Intersection Manager...")
 
-	//Apre la porta 50051 e gestisce eventuali errori
 	lis, err := net.Listen("tcp", ":50051")
 	if err != nil {
-    	log.Fatalf("Impossibile aprire la porta: %v", err)
-	}	
-	//Crea il Server gRPC
+		log.Fatalf("Impossibile aprire la porta: %v", err)
+	}
+
 	grpcServer := grpc.NewServer()
 	server := &intersectionServer{
 		registry: &VehicleRegistry{
 			vehicles: make(map[string]VehicleState),
 		},
 	}
-	// Registra il servizio IntersectionService
-    pb.RegisterIntersectionServiceServer(
-        grpcServer,
-        server,
-    )
+
+	pb.RegisterIntersectionServiceServer(grpcServer, server)
 	log.Println("Intersection Manager listening on port 50051...")
 
-    if err := grpcServer.Serve(lis); err != nil {
-        log.Fatalf("Error starting server: %v", err)
-    }
+	if err := grpcServer.Serve(lis); err != nil {
+		log.Fatalf("Error starting server: %v", err)
+	}
 }
