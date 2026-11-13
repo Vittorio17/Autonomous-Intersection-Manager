@@ -3,7 +3,7 @@ package vehicle
 import (
 	"context"
 	"io"
-	"log"
+	"log/slog"
 	"time"
 
 	pb "github.com/Vittorio17/Autonomous-Intersection-Manager/proto"
@@ -11,12 +11,19 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-const tickDuration = 1.0 // secondi per tick di simulazione
+const tickDuration = 1.0
 
 func Simulate(managerAddr string, vehicleID string, speed, distance float64, lane pb.Lane, dir pb.Direction, isEmergency bool) {
+	vLog := slog.With(
+		slog.String("vehicle_id", vehicleID),
+		slog.String("lane", lane.String()),
+		slog.String("direction", dir.String()),
+		slog.Bool("is_emergency", isEmergency),
+	)
+
 	conn, err := grpc.Dial(managerAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
-		log.Printf("[%s] Errore di connessione: %v", vehicleID, err)
+		vLog.Error("Errore di connessione al manager", slog.Any("error", err))
 		return
 	}
 	defer conn.Close()
@@ -24,18 +31,19 @@ func Simulate(managerAddr string, vehicleID string, speed, distance float64, lan
 	client := pb.NewIntersectionServiceClient(conn)
 	stream, err := client.Negotiate(context.Background())
 	if err != nil {
-		log.Printf("[%s] Errore apertura stream: %v", vehicleID, err)
+		vLog.Error("Errore apertura stream", slog.Any("error", err))
 		return
 	}
 
 	kin := NewKinematics(distance, speed, DefaultMaxAccel, DefaultMaxDecel)
-	log.Printf("[%s] Partito! Corsia: %v, Dir: %v, Vel: %.1fm/s, Dist: %.1fm, Emergency: %v",
-		vehicleID, lane, dir, kin.Speed, kin.Distance, isEmergency)
+	vLog.Info("Veicolo avviato",
+		slog.Float64("speed", kin.Speed),
+		slog.Float64("distance", kin.Distance),
+	)
 
 	respCh := make(chan *pb.ManagerResponse, 16)
 	errCh := make(chan error, 1)
 
-	// Goroutine dedicata all'ascolto continuo dal Manager (risposte dirette + push STATUS_ADJUST_SPEED)
 	go func() {
 		for {
 			res, err := stream.Recv()
@@ -47,7 +55,6 @@ func Simulate(managerAddr string, vehicleID string, speed, distance float64, lan
 		}
 	}()
 
-	// Funzione helper per inviare la telemetria corrente
 	sendTelemetry := func() error {
 		req := &pb.VehicleRequest{
 			VehicleId:   vehicleID,
@@ -60,9 +67,8 @@ func Simulate(managerAddr string, vehicleID string, speed, distance float64, lan
 		return stream.Send(req)
 	}
 
-	// Primo invio immediato all'avvio
 	if err := sendTelemetry(); err != nil {
-		log.Printf("[%s] Errore invio iniziale: %v", vehicleID, err)
+		vLog.Error("Errore invio telemetria iniziale", slog.Any("error", err))
 		return
 	}
 
@@ -74,13 +80,17 @@ func Simulate(managerAddr string, vehicleID string, speed, distance float64, lan
 		case res := <-respCh:
 			if res.Status == pb.CommandStatus_STATUS_REJECT || res.Status == pb.CommandStatus_STATUS_ADJUST_SPEED {
 				kin.SetTargetFromETA(res.TargetEta)
-				log.Printf("[%s] %v! Target ETA: %.2fs -> Rampa verso Vel target: %.2f m/s (attuale: %.2f m/s)",
-					vehicleID, res.Status, res.TargetEta, kin.TargetSpeed, kin.Speed)
+				vLog.Warn("Ricalcolo velocità richiesto",
+					slog.String("status", res.Status.String()),
+					slog.Float64("assigned_eta", res.TargetEta),
+					slog.Float64("target_speed", kin.TargetSpeed),
+					slog.Float64("current_speed", kin.Speed),
+				)
 			}
 
 		case err := <-errCh:
 			if err != io.EOF {
-				log.Printf("[%s] Disconnesso dal server: %v", vehicleID, err)
+				vLog.Error("Stream interrotto", slog.Any("error", err))
 			}
 			return
 
@@ -90,12 +100,12 @@ func Simulate(managerAddr string, vehicleID string, speed, distance float64, lan
 				break
 			}
 			if err := sendTelemetry(); err != nil {
-				log.Printf("[%s] Errore invio telemetria: %v", vehicleID, err)
+				vLog.Error("Errore invio telemetria", slog.Any("error", err))
 				return
 			}
 		}
 	}
 
 	stream.CloseSend()
-	log.Printf("[%s] Incrocio superato con successo!", vehicleID)
+	vLog.Info("Incrocio superato con successo")
 }
