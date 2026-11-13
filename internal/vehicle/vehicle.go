@@ -10,6 +10,8 @@ import (
     "google.golang.org/grpc/credentials/insecure"
 )
 
+const tickDuration = 1.0
+
 func Simulate(managerAddr string, vehicleID string, speed, distance float64, lane pb.Lane, dir pb.Direction) {
     conn, err := grpc.Dial(managerAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
     if err != nil {
@@ -25,14 +27,16 @@ func Simulate(managerAddr string, vehicleID string, speed, distance float64, lan
         return
     }
 
-    log.Printf("[%s] Partito! Corsia: %v, Dir: %v, Vel: %.0fm/s", vehicleID, lane, dir, speed)
+    kin := NewKinematics(distance, speed, DefaultMaxAccel, DefaultMaxDecel)
+	log.Printf("[%s] Partito! Corsia: %v, Dir: %v, Vel: %.1fm/s, Dist: %.1fm",
+		vehicleID, lane, dir, kin.Speed, kin.Distance)
 
-    for distance > 0 {
-        eta := distance / speed
+    for kin.Distance > 0 {
+        eta := kin.EstimateETA()
 
         req := &pb.VehicleRequest{
             VehicleId:  vehicleID,
-            Speed:      speed,
+            Speed:      kin.Speed,
             Eta:        eta,
             OriginLane: lane,
             Direction:  dir,
@@ -50,12 +54,13 @@ func Simulate(managerAddr string, vehicleID string, speed, distance float64, lan
         }
 
         if res.Status == pb.CommandStatus_STATUS_REJECT {
-            // Calcoliamo la velocità esatta per arrivare nel time slot suggerito dal Manager.
-            speed = distance / res.TargetEta 
-            log.Printf("[%s] REJECT! Ricalcolo analitico: Nuovo ETA %.2fs -> Vel esatta: %.2f m/s", vehicleID, res.TargetEta, speed)
-        }
-        distance -= speed
-        time.Sleep(1 * time.Second)
+			kin.SetTargetFromETA(res.TargetEta)
+			log.Printf("[%s] REJECT! Target ETA: %.2fs -> Rampa verso Vel target: %.2f m/s (attuale: %.2f m/s)",
+				vehicleID, res.TargetEta, kin.TargetSpeed, kin.Speed)
+		}
+
+		kin.Step(tickDuration)
+		time.Sleep(time.Duration(tickDuration * float64(time.Second)))
     }
     
     stream.CloseSend()
