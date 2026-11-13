@@ -202,3 +202,7 @@ On Windows you can run `proto.bat` instead.
 - The simulation tick is not compensated for gRPC latency or scheduling delays.
 - gRPC uses insecure credentials: the project is intended for local simulation
   only.
+
+# Calcolo ETA
+
+Se il veicolo sta ancora rallentando (o accelerando) per raggiungere $v_{\text{target}}$, inviare al Manager ETA = d / v sarebbe impreciso perché $v$ cambierà nei prossimi secondi. Calcoliamo invece il tempo reale diviso in due fasi:Tempo per raggiungere $v_{\text{target}}$:$$t_{\text{ramp}} = \frac{\vert{}v_{\text{target}} - v\vert{}}{a}$$(dove $a = \text{maxAccel}$ se $v_{\text{target}} > v$, oppure $a = \text{maxDecel}$ se $v_{\text{target}} < v$).Distanza percorsa durante la rampa:$$d_{\text{ramp}} = \frac{v + v_{\text{target}}}{2} \cdot t_{\text{ramp}}$$Due casi possibili:Caso 1 ($d_{\text{ramp}} \ge d$): Il veicolo raggiunge l'incrocio mentre sta ancora accelerando o frenando. Risolviamo l'equazione del moto $d = v \cdot t + \frac{1}{2} a_{\text{signed}} t^2$:$$\text{ETA} = \frac{-v + \sqrt{v^2 + 2 \cdot a_{\text{signed}} \cdot d}}{a_{\text{signed}}}$$Caso 2 ($d_{\text{ramp}} < d$): Il veicolo completa la rampa in $t_{\text{ramp}}$ e percorre la distanza rimanente $(d - d_{\text{ramp}})$ a velocità costante $v_{\text{target}}$:$$\text{ETA} = t_{\text{ramp}} + \frac{d - d_{\text{ramp}}}{v_{\text{target}}}$$
