@@ -181,15 +181,18 @@ func (CommandStatus) EnumDescriptor() ([]byte, []int) {
 }
 
 type VehicleRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	VehicleId     string                 `protobuf:"bytes,1,opt,name=vehicle_id,json=vehicleId,proto3" json:"vehicle_id,omitempty"`
-	Speed         float64                `protobuf:"fixed64,2,opt,name=speed,proto3" json:"speed,omitempty"` // m/s
-	Eta           float64                `protobuf:"fixed64,3,opt,name=eta,proto3" json:"eta,omitempty"`     //Seconds estimate to arrive
-	OriginLane    Lane                   `protobuf:"varint,4,opt,name=origin_lane,json=originLane,proto3,enum=intersection.Lane" json:"origin_lane,omitempty"`
-	Direction     Direction              `protobuf:"varint,5,opt,name=direction,proto3,enum=intersection.Direction" json:"direction,omitempty"`
-	IsEmergency   bool                   `protobuf:"varint,6,opt,name=is_emergency,json=isEmergency,proto3" json:"is_emergency,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	VehicleId      string                 `protobuf:"bytes,1,opt,name=vehicle_id,json=vehicleId,proto3" json:"vehicle_id,omitempty"`
+	Speed          float64                `protobuf:"fixed64,2,opt,name=speed,proto3" json:"speed,omitempty"` // m/s
+	Eta            float64                `protobuf:"fixed64,3,opt,name=eta,proto3" json:"eta,omitempty"`     //Seconds estimate to arrive
+	OriginLane     Lane                   `protobuf:"varint,4,opt,name=origin_lane,json=originLane,proto3,enum=intersection.Lane" json:"origin_lane,omitempty"`
+	Direction      Direction              `protobuf:"varint,5,opt,name=direction,proto3,enum=intersection.Direction" json:"direction,omitempty"`
+	IsEmergency    bool                   `protobuf:"varint,6,opt,name=is_emergency,json=isEmergency,proto3" json:"is_emergency,omitempty"`
+	VehicleLengthM float64                `protobuf:"fixed64,7,opt,name=vehicle_length_m,json=vehicleLengthM,proto3" json:"vehicle_length_m,omitempty"`
+	DistanceM      float64                `protobuf:"fixed64,8,opt,name=distance_m,json=distanceM,proto3" json:"distance_m,omitempty"`
+	HasExited      bool                   `protobuf:"varint,9,opt,name=has_exited,json=hasExited,proto3" json:"has_exited,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *VehicleRequest) Reset() {
@@ -264,11 +267,35 @@ func (x *VehicleRequest) GetIsEmergency() bool {
 	return false
 }
 
+func (x *VehicleRequest) GetVehicleLengthM() float64 {
+	if x != nil {
+		return x.VehicleLengthM
+	}
+	return 0
+}
+
+func (x *VehicleRequest) GetDistanceM() float64 {
+	if x != nil {
+		return x.DistanceM
+	}
+	return 0
+}
+
+func (x *VehicleRequest) GetHasExited() bool {
+	if x != nil {
+		return x.HasExited
+	}
+	return false
+}
+
 type ManagerResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	VehicleId     string                 `protobuf:"bytes,1,opt,name=vehicle_id,json=vehicleId,proto3" json:"vehicle_id,omitempty"`
 	Status        CommandStatus          `protobuf:"varint,2,opt,name=status,proto3,enum=intersection.CommandStatus" json:"status,omitempty"`
 	TargetEta     float64                `protobuf:"fixed64,3,opt,name=target_eta,json=targetEta,proto3" json:"target_eta,omitempty"` //L'istante di tempo suggerito dal Manager
+	EntryTimeMs   int64                  `protobuf:"varint,4,opt,name=entry_time_ms,json=entryTimeMs,proto3" json:"entry_time_ms,omitempty"`
+	ExitTimeMs    int64                  `protobuf:"varint,5,opt,name=exit_time_ms,json=exitTimeMs,proto3" json:"exit_time_ms,omitempty"`
+	ServerTimeMs  int64                  `protobuf:"varint,6,opt,name=server_time_ms,json=serverTimeMs,proto3" json:"server_time_ms,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -324,11 +351,32 @@ func (x *ManagerResponse) GetTargetEta() float64 {
 	return 0
 }
 
+func (x *ManagerResponse) GetEntryTimeMs() int64 {
+	if x != nil {
+		return x.EntryTimeMs
+	}
+	return 0
+}
+
+func (x *ManagerResponse) GetExitTimeMs() int64 {
+	if x != nil {
+		return x.ExitTimeMs
+	}
+	return 0
+}
+
+func (x *ManagerResponse) GetServerTimeMs() int64 {
+	if x != nil {
+		return x.ServerTimeMs
+	}
+	return 0
+}
+
 var File_proto_intersection_proto protoreflect.FileDescriptor
 
 const file_proto_intersection_proto_rawDesc = "" +
 	"\n" +
-	"\x18proto/intersection.proto\x12\fintersection\"\xe6\x01\n" +
+	"\x18proto/intersection.proto\x12\fintersection\"\xce\x02\n" +
 	"\x0eVehicleRequest\x12\x1d\n" +
 	"\n" +
 	"vehicle_id\x18\x01 \x01(\tR\tvehicleId\x12\x14\n" +
@@ -337,13 +385,22 @@ const file_proto_intersection_proto_rawDesc = "" +
 	"\vorigin_lane\x18\x04 \x01(\x0e2\x12.intersection.LaneR\n" +
 	"originLane\x125\n" +
 	"\tdirection\x18\x05 \x01(\x0e2\x17.intersection.DirectionR\tdirection\x12!\n" +
-	"\fis_emergency\x18\x06 \x01(\bR\visEmergency\"\x84\x01\n" +
+	"\fis_emergency\x18\x06 \x01(\bR\visEmergency\x12(\n" +
+	"\x10vehicle_length_m\x18\a \x01(\x01R\x0evehicleLengthM\x12\x1d\n" +
+	"\n" +
+	"distance_m\x18\b \x01(\x01R\tdistanceM\x12\x1d\n" +
+	"\n" +
+	"has_exited\x18\t \x01(\bR\thasExited\"\xf0\x01\n" +
 	"\x0fManagerResponse\x12\x1d\n" +
 	"\n" +
 	"vehicle_id\x18\x01 \x01(\tR\tvehicleId\x123\n" +
 	"\x06status\x18\x02 \x01(\x0e2\x1b.intersection.CommandStatusR\x06status\x12\x1d\n" +
 	"\n" +
-	"target_eta\x18\x03 \x01(\x01R\ttargetEta*V\n" +
+	"target_eta\x18\x03 \x01(\x01R\ttargetEta\x12\"\n" +
+	"\rentry_time_ms\x18\x04 \x01(\x03R\ventryTimeMs\x12 \n" +
+	"\fexit_time_ms\x18\x05 \x01(\x03R\n" +
+	"exitTimeMs\x12$\n" +
+	"\x0eserver_time_ms\x18\x06 \x01(\x03R\fserverTimeMs*V\n" +
 	"\x04Lane\x12\x10\n" +
 	"\fLANE_UNKNOWN\x10\x00\x12\x0e\n" +
 	"\n" +

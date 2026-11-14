@@ -72,3 +72,11 @@ func arePathsConflicting(l1 pb.Lane, d1 pb.Direction, l2 pb.Lane, d2 pb.Directio
 	// AND bit by bit (&): if the result != 0, they share at least one quadrant
 	return (t1.quadrants & t2.quadrants) != qNone
 }
+
+func getTrajectoryQuadrants(lane pb.Lane, dir pb.Direction) uint8 {
+	t, ok := trajectoryTable[pathKey{lane: lane, dir: dir}]
+	if !ok {
+		return uint8(qNW | qNE | qSW | qSE) // Fail-safe: blocca tutti e 4 i quadranti
+	}
+	return uint8(t.quadrants)
+}

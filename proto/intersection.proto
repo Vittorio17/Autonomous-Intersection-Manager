@@ -31,6 +31,9 @@ message VehicleRequest{
     Lane origin_lane = 4;
     Direction direction = 5;
     bool is_emergency = 6;
+    double vehicle_length_m = 7;
+    double distance_m = 8;
+    bool has_exited = 9;
 }
 
 enum CommandStatus{
@@ -44,4 +47,7 @@ message ManagerResponse{
     string vehicle_id = 1;
     CommandStatus status = 2;
     double target_eta = 3; //L'istante di tempo suggerito dal Manager
+    int64 entry_time_ms = 4;
+    int64 exit_time_ms = 5;
+    int64 server_time_ms = 6;
 }

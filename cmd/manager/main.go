@@ -3,12 +3,11 @@ package main
 import (
 	"io"
 	"log/slog"
-	"math"
 	"net"
 	"os"
 	"os/signal"
-	"sync"
 	"syscall"
+	"time"
 
 	"github.com/Vittorio17/Autonomous-Intersection-Manager/internal/logger"
 	pb "github.com/Vittorio17/Autonomous-Intersection-Manager/proto"
@@ -17,156 +16,9 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-const (
-	safetyGapSec     = 2.0
-	commitHorizonSec = 1.5
-)
-
-type VehicleState struct {
-	VehicleID   string
-	Speed       float64
-	ETA         float64
-	OriginLane  pb.Lane
-	Direction   pb.Direction
-	IsEmergency bool
-	NotifyCh    chan *pb.ManagerResponse
-}
-
-type VehicleRegistry struct {
-	mu       sync.Mutex
-	vehicles map[string]VehicleState
-	metrics  *Metrics
-}
-
-func (r *VehicleRegistry) RemoveVehicle(id string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	delete(r.vehicles, id)
-}
-
-func (r *VehicleRegistry) ReserveOrSuggest(req *pb.VehicleRequest, notifyCh chan *pb.ManagerResponse) (pb.CommandStatus, float64) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	targetETA := req.Eta
-
-	if req.IsEmergency {
-		for {
-			shifted := false
-			for id, v := range r.vehicles {
-				if id == req.VehicleId {
-					continue
-				}
-				if arePathsConflicting(req.OriginLane, req.Direction, v.OriginLane, v.Direction) {
-					if math.Abs(v.ETA-targetETA) < safetyGapSec {
-						if v.IsEmergency || v.ETA <= commitHorizonSec {
-							targetETA = v.ETA + safetyGapSec
-							shifted = true
-							break
-						}
-					}
-				}
-			}
-			if !shifted {
-				break
-			}
-		}
-
-		r.preemptConflictingVehicles(req, targetETA)
-
-		r.vehicles[req.VehicleId] = VehicleState{
-			VehicleID:   req.VehicleId,
-			Speed:       req.Speed,
-			ETA:         targetETA,
-			OriginLane:  req.OriginLane,
-			Direction:   req.Direction,
-			IsEmergency: true,
-			NotifyCh:    notifyCh,
-		}
-
-		if math.Abs(targetETA-req.Eta) < 1e-6 {
-			return pb.CommandStatus_STATUS_ACK_LOCK, targetETA
-		}
-		return pb.CommandStatus_STATUS_REJECT, targetETA
-	}
-
-	for {
-		shifted := false
-		for id, v := range r.vehicles {
-			if id == req.VehicleId {
-				continue
-			}
-			if arePathsConflicting(req.OriginLane, req.Direction, v.OriginLane, v.Direction) {
-				if math.Abs(v.ETA-targetETA) < safetyGapSec {
-					targetETA = v.ETA + safetyGapSec
-					shifted = true
-					break
-				}
-			}
-		}
-		if !shifted {
-			break
-		}
-	}
-
-	if math.Abs(targetETA-req.Eta) < 1e-6 {
-		r.vehicles[req.VehicleId] = VehicleState{
-			VehicleID:   req.VehicleId,
-			Speed:       req.Speed,
-			ETA:         targetETA,
-			OriginLane:  req.OriginLane,
-			Direction:   req.Direction,
-			IsEmergency: false,
-			NotifyCh:    notifyCh,
-		}
-		return pb.CommandStatus_STATUS_ACK_LOCK, targetETA
-	}
-
-	return pb.CommandStatus_STATUS_REJECT, targetETA
-}
-
-func (r *VehicleRegistry) preemptConflictingVehicles(emergReq *pb.VehicleRequest, emergETA float64) {
-	for id, v := range r.vehicles {
-		if id == emergReq.VehicleId || v.IsEmergency {
-			continue
-		}
-		if arePathsConflicting(emergReq.OriginLane, emergReq.Direction, v.OriginLane, v.Direction) {
-			if math.Abs(v.ETA-emergETA) < safetyGapSec {
-				newETA := emergETA + safetyGapSec
-				v.ETA = newETA
-				r.vehicles[id] = v
-
-				if r.metrics != nil {
-					r.metrics.RecordPreemption()
-				}
-
-				slog.Info("Preemption slot veicolo ordinario",
-					slog.String("vehicle_id", v.VehicleID),
-					slog.String("preempted_by", emergReq.VehicleId),
-					slog.Float64("new_eta", newETA),
-				)
-
-				if v.NotifyCh != nil {
-					select {
-					case v.NotifyCh <- &pb.ManagerResponse{
-						VehicleId: v.VehicleID,
-						Status:    pb.CommandStatus_STATUS_ADJUST_SPEED,
-						TargetEta: newETA,
-					}:
-					default:
-						slog.Warn("Canale notifiche pieno, aggiornamento saltato",
-							slog.String("vehicle_id", v.VehicleID),
-						)
-					}
-				}
-			}
-		}
-	}
-}
-
 type intersectionServer struct {
 	pb.UnimplementedIntersectionServiceServer
-	registry *VehicleRegistry
+	grid *ReservationGrid
 	metrics  *Metrics
 }
 
@@ -178,7 +30,7 @@ func (s *intersectionServer) Negotiate(stream pb.IntersectionService_NegotiateSe
 
 	defer func() {
 		if currentVehicleID != "" {
-			s.registry.RemoveVehicle(currentVehicleID)
+			s.grid.RemoveVehicle(currentVehicleID)
 			if completedCleanly && s.metrics != nil {
 				s.metrics.RecordVehicleCompleted()
 			}
@@ -230,13 +82,35 @@ func (s *intersectionServer) Negotiate(stream pb.IntersectionService_NegotiateSe
 		}
 
 		currentVehicleID = req.VehicleId
+
+		if req.HasExited{
+			s.grid.RemoveVehicle(req.VehicleId)
+			completedCleanly = true
+			return nil
+		}
+
 		if s.metrics != nil {
 			s.metrics.RecordVehicleSeen(req.VehicleId)
 		}
 
-		decision, suggestedETA := s.registry.ReserveOrSuggest(req, sendCh)
-		isReject := decision == pb.CommandStatus_STATUS_REJECT
+		serverNowMs := time.Now().UnixMilli()
+		decision, suggestedETA, entryMs, exitMs := s.grid.ReserveOrSuggest(
+			req,
+			serverNowMs,
+			sendCh,
+			func(preemptedID string, newETA float64) {
+				if s.metrics != nil {
+					s.metrics.RecordPreemption()
+				}
+				slog.Info("Preemption slot veicolo ordinario",
+					slog.String("vehicle_id", preemptedID),
+					slog.String("preempted_by", req.VehicleId),
+					slog.Float64("new_eta", newETA),
+				)
+			},
+		)
 
+		isReject := decision == pb.CommandStatus_STATUS_REJECT
 		if s.metrics != nil {
 			s.metrics.RecordDecision(isReject)
 		}
@@ -245,23 +119,29 @@ func (s *intersectionServer) Negotiate(stream pb.IntersectionService_NegotiateSe
 			slog.String("vehicle_id", req.VehicleId),
 			slog.String("lane", req.OriginLane.String()),
 			slog.String("direction", req.Direction.String()),
+			slog.Float64("distance_m", req.DistanceM),
 			slog.Float64("speed", req.Speed),
 			slog.Float64("eta", req.Eta),
 			slog.Float64("assigned_eta", suggestedETA),
+			slog.Int64("entry_time_ms", entryMs),
+			slog.Int64("exit_time_ms", exitMs),
 			slog.String("status", decision.String()),
 			slog.Bool("is_emergency", req.IsEmergency),
 		}
 
 		if isReject {
-			slog.Warn("Conflitto rilevato nella negoziazione", logAttrs...)
+			slog.Warn("Conflitto rilevato nella ReservationGrid", logAttrs...)
 		} else {
-			slog.Info("Negoziazione elaborata", logAttrs...)
+			slog.Info("Prenotazione confermata", logAttrs...)
 		}
 
 		res := &pb.ManagerResponse{
-			VehicleId: req.VehicleId,
-			Status:    decision,
-			TargetEta: suggestedETA,
+			VehicleId:    req.VehicleId,
+			Status:       decision,
+			TargetEta:    suggestedETA,
+			EntryTimeMs:  entryMs,
+			ExitTimeMs:   exitMs,
+			ServerTimeMs: serverNowMs,
 		}
 
 		select {
@@ -285,11 +165,8 @@ func main() {
 	metrics := NewMetrics()
 	grpcServer := grpc.NewServer()
 	server := &intersectionServer{
-		metrics: metrics,
-		registry: &VehicleRegistry{
-			vehicles: make(map[string]VehicleState),
-			metrics:  metrics,
-		},
+	    metrics: metrics,
+	    grid:    NewReservationGrid(),
 	}
 
 	pb.RegisterIntersectionServiceServer(grpcServer, server)
