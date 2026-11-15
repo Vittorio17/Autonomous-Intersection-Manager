@@ -103,6 +103,15 @@ func (g *ReservationGrid) ReserveOrSuggest(
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
+	// Se il veicolo ordinario ha già uno slot bloccato, mantiene il proprio corridoio temporale
+	// (verrà spostato solo in caso di preemption da parte di un mezzo di emergenza)
+	if !req.IsEmergency {
+		if existing, ok := g.reservations[req.VehicleId]; ok {
+			remainingETA := math.Max(0, float64(existing.EntryTimeMs-serverNowMs)/1000.0)
+			return pb.CommandStatus_STATUS_ACK_LOCK, remainingETA, existing.EntryTimeMs, existing.ExitTimeMs
+		}
+	}
+
 	quads := getTrajectoryQuadrants(req.OriginLane, req.Direction)
 	crossingMs, bufferMs := ComputeCrossingDurationMs(req.Direction, req.VehicleLengthM, req.Speed)
 	totalSpanMs := crossingMs + bufferMs

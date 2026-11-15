@@ -211,3 +211,25 @@ Se il veicolo sta ancora rallentando (o accelerando) per raggiungere $v_{\text{t
 # Modello Fisico della Reservation Grid
 
 Per superare il limite del margine fisso da 2.0s ed evitare sovrapposizioni reali nella simulazione, definiamo:Lunghezza geometrica della manovra dentro l'incrocio (assumendo un incrocio standard largo $W = 14\text{ m}$):Svolta a destra (DIR_RIGHT): arco corto $\approx 9.0\text{ m}$ (impegna 1 quadrante).Attraversamento dritto (DIR_STRAIGHT): tratto rettilineo $= 14.0\text{ m}$ (impegna 2 quadranti).Svolta a sinistra (DIR_LEFT): arco ampio $\approx 18.5\text{ m}$ (impegna 3 quadranti e dura più a lungo a parità di velocità).Tempo di attraversamento + Safety Buffer dinamico:Durata fisica: $t_{\text{cross}} = \frac{L_{\text{manovra}} + L_{\text{veicolo}}}{v_{\text{ingresso}}}$ (con velocità minima di sicurezza $v_{\min} = 5\text{ m/s}$ per evitare divisioni per zero o stalli infiniti).Margine di sicurezza dinamico (tempo di reazione + frenata residua): $\text{buffer} = 0.5\text{ s} + \frac{L_{\text{veicolo}}}{v_{\text{ingresso}}}$.L'intervallo prenotato sui quadranti impegnati dalla traiettoria diventa esattamente:$$[\text{entryTimeMs},\ \text{exitTimeMs} + \text{bufferMs}]$$Risoluzione dei conflitti (Sliding Window):Due prenotazioni vanno in conflitto se e solo se condividono almeno un quadrante (calcolato dalla bitmask di conflict.go) e i loro intervalli assoluti si sovrappongono (startA < endB && startB < endA).Se c'è conflitto, l'algoritmo sposta entryTimeMs subito dopo endB e ripete la scansione fino a trovare il primo corridoio temporale completamente libero.
+
+# Parametri cmd/spawner/main.go
+
+Parametri configurabili sia via Flag CLI che via Variabili d'Ambiente (con precedenza ai flag CLI):
+
+-profile / SPAWNER_PROFILE: profili predefiniti normal (default), burst (ondate simultanee su più corsie per forzare conflitti sullo stesso ETA) e high_congestion (intervalli stretti, alta densità e molte svolte a sinistra).
+
+-seed / SPAWNER_SEED: seed deterministico (default 42).
+
+-interval / SPAWNER_INTERVAL: intervallo base tra arrivi/ondate (es. 1500ms).
+
+-turn-ratio / SPAWNER_TURN_RATIO: probabilità complessiva di svolta (0.0 = solo dritti, 1.0 = solo svolte, bilanciate tra sinistra e destra).
+
+-emergency-ratio / SPAWNER_EMERGENCY_RATIO: probabilità di mezzo di emergenza (default 0.10).
+
+-burst-size / SPAWNER_BURST_SIZE: quanti veicoli generare simultaneamente ad ogni tick (es. 1 in normal, 3 in burst).
+
+-max-vehicles / SPAWNER_MAX_VEHICLES: numero massimo di veicoli da generare prima di attendere il completamento e terminare (0 = infinito, utile nei benchmark).
+
+Profilo high_congestion + Script rapido:
+
+Impostando -profile=high_congestion (o SPAWNER_PROFILE=high_congestion), lo spawner configura automaticamente un intervallo di 350ms, burst-size=2, turn-ratio=0.55 e distanze ravvicinate (180m–320m) per portare la Reservati
