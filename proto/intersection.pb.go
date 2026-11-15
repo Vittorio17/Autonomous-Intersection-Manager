@@ -296,6 +296,7 @@ type ManagerResponse struct {
 	EntryTimeMs   int64                  `protobuf:"varint,4,opt,name=entry_time_ms,json=entryTimeMs,proto3" json:"entry_time_ms,omitempty"`
 	ExitTimeMs    int64                  `protobuf:"varint,5,opt,name=exit_time_ms,json=exitTimeMs,proto3" json:"exit_time_ms,omitempty"`
 	ServerTimeMs  int64                  `protobuf:"varint,6,opt,name=server_time_ms,json=serverTimeMs,proto3" json:"server_time_ms,omitempty"`
+	StopDistanceM float64                `protobuf:"fixed64,7,opt,name=stop_distance_m,json=stopDistanceM,proto3" json:"stop_distance_m,omitempty"` // Distanza target alla quale arrestarsi (stop-line o coda)
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -372,6 +373,13 @@ func (x *ManagerResponse) GetServerTimeMs() int64 {
 	return 0
 }
 
+func (x *ManagerResponse) GetStopDistanceM() float64 {
+	if x != nil {
+		return x.StopDistanceM
+	}
+	return 0
+}
+
 var File_proto_intersection_proto protoreflect.FileDescriptor
 
 const file_proto_intersection_proto_rawDesc = "" +
@@ -390,7 +398,7 @@ const file_proto_intersection_proto_rawDesc = "" +
 	"\n" +
 	"distance_m\x18\b \x01(\x01R\tdistanceM\x12\x1d\n" +
 	"\n" +
-	"has_exited\x18\t \x01(\bR\thasExited\"\xf0\x01\n" +
+	"has_exited\x18\t \x01(\bR\thasExited\"\x98\x02\n" +
 	"\x0fManagerResponse\x12\x1d\n" +
 	"\n" +
 	"vehicle_id\x18\x01 \x01(\tR\tvehicleId\x123\n" +
@@ -400,7 +408,8 @@ const file_proto_intersection_proto_rawDesc = "" +
 	"\rentry_time_ms\x18\x04 \x01(\x03R\ventryTimeMs\x12 \n" +
 	"\fexit_time_ms\x18\x05 \x01(\x03R\n" +
 	"exitTimeMs\x12$\n" +
-	"\x0eserver_time_ms\x18\x06 \x01(\x03R\fserverTimeMs*V\n" +
+	"\x0eserver_time_ms\x18\x06 \x01(\x03R\fserverTimeMs\x12&\n" +
+	"\x0fstop_distance_m\x18\a \x01(\x01R\rstopDistanceM*V\n" +
 	"\x04Lane\x12\x10\n" +
 	"\fLANE_UNKNOWN\x10\x00\x12\x0e\n" +
 	"\n" +

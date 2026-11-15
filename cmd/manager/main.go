@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"io"
 	"log/slog"
 	"net"
@@ -18,8 +19,19 @@ import (
 
 type intersectionServer struct {
 	pb.UnimplementedIntersectionServiceServer
-	grid *ReservationGrid
-	metrics  *Metrics
+	mode         string // "aim" (default) oppure "traffic_light"
+	grid         *ReservationGrid
+	trafficLight *TrafficLightController
+	metrics      *Metrics
+}
+
+func (s *intersectionServer) removeVehicleFromControllers(vehicleID string) {
+	if s.grid != nil {
+		s.grid.RemoveVehicle(vehicleID)
+	}
+	if s.trafficLight != nil {
+		s.trafficLight.RemoveVehicle(vehicleID)
+	}
 }
 
 func (s *intersectionServer) Negotiate(stream pb.IntersectionService_NegotiateServer) error {
@@ -30,7 +42,7 @@ func (s *intersectionServer) Negotiate(stream pb.IntersectionService_NegotiateSe
 
 	defer func() {
 		if currentVehicleID != "" {
-			s.grid.RemoveVehicle(currentVehicleID)
+			s.removeVehicleFromControllers(currentVehicleID)
 			if completedCleanly && s.metrics != nil {
 				s.metrics.RecordVehicleCompleted()
 			}
@@ -83,8 +95,8 @@ func (s *intersectionServer) Negotiate(stream pb.IntersectionService_NegotiateSe
 
 		currentVehicleID = req.VehicleId
 
-		if req.HasExited{
-			s.grid.RemoveVehicle(req.VehicleId)
+		if req.HasExited {
+			s.removeVehicleFromControllers(req.VehicleId)
 			completedCleanly = true
 			return nil
 		}
@@ -93,55 +105,96 @@ func (s *intersectionServer) Negotiate(stream pb.IntersectionService_NegotiateSe
 			s.metrics.RecordVehicleSeen(req.VehicleId)
 		}
 
-		serverNowMs := time.Now().UnixMilli()
-		decision, suggestedETA, entryMs, exitMs := s.grid.ReserveOrSuggest(
-			req,
-			serverNowMs,
-			sendCh,
-			func(preemptedID string, newETA float64) {
-				if s.metrics != nil {
-					s.metrics.RecordPreemption()
-				}
-				slog.Info("Preemption slot veicolo ordinario",
-					slog.String("vehicle_id", preemptedID),
-					slog.String("preempted_by", req.VehicleId),
-					slog.Float64("new_eta", newETA),
-				)
-			},
-		)
+		var res *pb.ManagerResponse
 
-		isReject := decision == pb.CommandStatus_STATUS_REJECT
-		if s.metrics != nil {
-			s.metrics.RecordDecision(isReject)
-		}
+		if s.mode == "traffic_light" {
+			now := time.Now()
+			serverNowMs := now.UnixMilli()
+			decision, suggestedETA, stopDist := s.trafficLight.Evaluate(req, now)
 
-		logAttrs := []any{
-			slog.String("vehicle_id", req.VehicleId),
-			slog.String("lane", req.OriginLane.String()),
-			slog.String("direction", req.Direction.String()),
-			slog.Float64("distance_m", req.DistanceM),
-			slog.Float64("speed", req.Speed),
-			slog.Float64("eta", req.Eta),
-			slog.Float64("assigned_eta", suggestedETA),
-			slog.Int64("entry_time_ms", entryMs),
-			slog.Int64("exit_time_ms", exitMs),
-			slog.String("status", decision.String()),
-			slog.Bool("is_emergency", req.IsEmergency),
-		}
+			isReject := decision == pb.CommandStatus_STATUS_REJECT
+			if s.metrics != nil {
+				s.metrics.RecordDecision(isReject)
+			}
 
-		if isReject {
-			slog.Warn("Conflitto rilevato nella ReservationGrid", logAttrs...)
+			logAttrs := []any{
+				slog.String("mode", "traffic_light"),
+				slog.String("vehicle_id", req.VehicleId),
+				slog.String("lane", req.OriginLane.String()),
+				slog.String("direction", req.Direction.String()),
+				slog.Float64("distance_m", req.DistanceM),
+				slog.Float64("speed", req.Speed),
+				slog.Float64("stop_distance_m", stopDist),
+				slog.String("status", decision.String()),
+				slog.Bool("is_emergency", req.IsEmergency),
+			}
+
+			if isReject {
+				slog.Debug("Arresto semaforico / coda", logAttrs...)
+			} else {
+				slog.Debug("Transito semaforico autorizzato", logAttrs...)
+			}
+
+			res = &pb.ManagerResponse{
+				VehicleId:     req.VehicleId,
+				Status:        decision,
+				TargetEta:     suggestedETA,
+				ServerTimeMs:  serverNowMs,
+				StopDistanceM: stopDist,
+			}
 		} else {
-			slog.Info("Prenotazione confermata", logAttrs...)
-		}
+			serverNowMs := time.Now().UnixMilli()
+			decision, suggestedETA, entryMs, exitMs := s.grid.ReserveOrSuggest(
+				req,
+				serverNowMs,
+				sendCh,
+				func(preemptedID string, newETA float64) {
+					if s.metrics != nil {
+						s.metrics.RecordPreemption()
+					}
+					slog.Info("Preemption slot veicolo ordinario",
+						slog.String("vehicle_id", preemptedID),
+						slog.String("preempted_by", req.VehicleId),
+						slog.Float64("new_eta", newETA),
+					)
+				},
+			)
 
-		res := &pb.ManagerResponse{
-			VehicleId:    req.VehicleId,
-			Status:       decision,
-			TargetEta:    suggestedETA,
-			EntryTimeMs:  entryMs,
-			ExitTimeMs:   exitMs,
-			ServerTimeMs: serverNowMs,
+			isReject := decision == pb.CommandStatus_STATUS_REJECT
+			if s.metrics != nil {
+				s.metrics.RecordDecision(isReject)
+			}
+
+			logAttrs := []any{
+				slog.String("mode", "aim"),
+				slog.String("vehicle_id", req.VehicleId),
+				slog.String("lane", req.OriginLane.String()),
+				slog.String("direction", req.Direction.String()),
+				slog.Float64("distance_m", req.DistanceM),
+				slog.Float64("speed", req.Speed),
+				slog.Float64("eta", req.Eta),
+				slog.Float64("assigned_eta", suggestedETA),
+				slog.Int64("entry_time_ms", entryMs),
+				slog.Int64("exit_time_ms", exitMs),
+				slog.String("status", decision.String()),
+				slog.Bool("is_emergency", req.IsEmergency),
+			}
+
+			if isReject {
+				slog.Warn("Conflitto rilevato nella ReservationGrid", logAttrs...)
+			} else {
+				slog.Info("Prenotazione confermata", logAttrs...)
+			}
+
+			res = &pb.ManagerResponse{
+				VehicleId:     req.VehicleId,
+				Status:        decision,
+				TargetEta:     suggestedETA,
+				EntryTimeMs:   entryMs,
+				ExitTimeMs:    exitMs,
+				ServerTimeMs:  serverNowMs,
+				StopDistanceM: -1,
+			}
 		}
 
 		select {
@@ -154,7 +207,20 @@ func (s *intersectionServer) Negotiate(stream pb.IntersectionService_NegotiateSe
 
 func main() {
 	logger.Init("intersection-manager")
-	slog.Info("Avvio Intersection Manager...")
+
+	mode := os.Getenv("MODE")
+	if mode == "" {
+		mode = "aim"
+	}
+	flag.StringVar(&mode, "mode", mode, "Modalità operativa: aim (default) oppure traffic_light")
+	flag.Parse()
+
+	if mode != "aim" && mode != "traffic_light" {
+		slog.Error("Modalità non valida: usare 'aim' oppure 'traffic_light'", slog.String("mode", mode))
+		os.Exit(1)
+	}
+
+	slog.Info("Avvio Intersection Manager...", slog.String("mode", mode))
 
 	lis, err := net.Listen("tcp", ":50051")
 	if err != nil {
@@ -165,21 +231,24 @@ func main() {
 	metrics := NewMetrics()
 	grpcServer := grpc.NewServer()
 	server := &intersectionServer{
-	    metrics: metrics,
-	    grid:    NewReservationGrid(),
+		mode:         mode,
+		metrics:      metrics,
+		grid:         NewReservationGrid(),
+		trafficLight: NewTrafficLightController(time.Now()),
 	}
 
 	pb.RegisterIntersectionServiceServer(grpcServer, server)
 
-	// Avvia il server gRPC in una goroutine per gestire l'arresto ordinato (SIGINT/SIGTERM)
 	go func() {
-		slog.Info("Intersection Manager in ascolto", slog.String("address", ":50051"))
+		slog.Info("Intersection Manager in ascolto",
+			slog.String("address", ":50051"),
+			slog.String("mode", mode),
+		)
 		if err := grpcServer.Serve(lis); err != nil {
 			slog.Error("Errore server gRPC", slog.Any("error", err))
 		}
 	}()
 
-	// Attesa segnale di terminazione (Ctrl+C o docker stop)
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 	sig := <-sigCh

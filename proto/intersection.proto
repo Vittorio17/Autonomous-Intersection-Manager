@@ -49,5 +49,6 @@ message ManagerResponse{
     double target_eta = 3; //L'istante di tempo suggerito dal Manager
     int64 entry_time_ms = 4;
     int64 exit_time_ms = 5;
-    int64 server_time_ms = 6;
+    int64 server_time_ms = 6; 
+    double stop_distance_m = 7; // Distanza target alla quale arrestarsi (stop-line o coda)
 }
