@@ -12,8 +12,10 @@ type Kinematics struct {
 	Distance    float64
 	Speed       float64
 	TargetSpeed float64
+	CruiseSpeed float64
 	MaxAccel    float64
 	MaxDecel    float64
+	StopDistance *float64
 }
 
 func NewKinematics(distance, initialSpeed, maxAccel, maxDecel float64) *Kinematics {
@@ -27,17 +29,34 @@ func NewKinematics(distance, initialSpeed, maxAccel, maxDecel float64) *Kinemati
 		Distance:    distance,
 		Speed:       initialSpeed,
 		TargetSpeed: initialSpeed,
+		CruiseSpeed: initialSpeed,
 		MaxAccel:    maxAccel,
 		MaxDecel:    maxDecel,
 	}
 }
 
-// SetTargetFromETA calcola la TargetSpeed tale che, considerando la rampa di
-// accelerazione o decelerazione, il tempo totale d'arrivo coincida con targetETA.
+
+// SetStopTarget impone l'arresto completo (speed = 0) a stopDist metri dalla stop-line.
+func (k *Kinematics) SetStopTarget(stopDist float64) {
+	if stopDist < 0 {
+		stopDist = 0
+	}
+	k.StopDistance = &stopDist
+}
+
+// ClearStopTarget rimuove il vincolo di arresto (es. semaforo verde) e ripristina la velocità di crociera.
+func (k *Kinematics) ClearStopTarget() {
+	if k.StopDistance != nil {
+		k.StopDistance = nil
+		k.TargetSpeed = k.CruiseSpeed
+	}
+}
+
 func (k *Kinematics) SetTargetFromETA(targetETA float64) {
 	if targetETA <= 0 || k.Distance <= 0 {
 		return
 	}
+	k.StopDistance = nil
 
 	avgNeeded := k.Distance / targetETA
 	var desired float64
@@ -52,8 +71,6 @@ func (k *Kinematics) SetTargetFromETA(targetETA float64) {
 			desired = avgNeeded
 		}
 	} else {
-		// Dobbiamo accelerare (a = +MaxAccel).
-		// d = v_f * T - (v_f - v_0)^2 / (2 * accel)
 		a := k.MaxAccel
 		b := a*targetETA + k.Speed
 		disc := b*b - (k.Speed*k.Speed + 2*a*k.Distance)
@@ -71,8 +88,21 @@ func (k *Kinematics) SetTargetFromETA(targetETA float64) {
 }
 
 func (k *Kinematics) Step(dt float64) {
-	if dt <= 0 || k.Distance <= 0 {
+	if dt <= 0 {
 		return
+	}
+
+	// Se c'è un target di arresto (rosso o coda), calcola il profilo di frenata fino a speed = 0
+	if k.StopDistance != nil && k.Distance > 0 {
+		distToStop := math.Max(0, k.Distance-*k.StopDistance)
+		if distToStop <= 0.05 {
+			k.Speed = 0
+			k.Distance = *k.StopDistance
+			return
+		}
+		// v = sqrt(2 * a_decel * d) per fermarsi esattamente a *StopDistance
+		safeApproachSpeed := math.Sqrt(2.0 * k.MaxDecel * distToStop)
+		k.TargetSpeed = math.Min(k.CruiseSpeed, safeApproachSpeed)
 	}
 
 	prevSpeed := k.Speed
@@ -86,14 +116,21 @@ func (k *Kinematics) Step(dt float64) {
 		k.Speed += deltaV
 	}
 
-	if k.Speed < MinSpeed {
-		k.Speed = MinSpeed
+	if k.StopDistance == nil {
+		if k.Speed < MinSpeed {
+			k.Speed = MinSpeed
+		}
+	} else if k.Speed < 0 {
+		k.Speed = 0
 	}
 
 	avgSpeed := (prevSpeed + k.Speed) / 2.0
 	k.Distance -= avgSpeed * dt
-	if k.Distance < 0 {
-		k.Distance = 0
+
+	// Non oltrepassa mai il punto di arresto quando StopDistance è attivo
+	if k.StopDistance != nil && k.Distance < *k.StopDistance {
+		k.Distance = *k.StopDistance
+		k.Speed = 0
 	}
 }
 
@@ -101,10 +138,14 @@ func (k *Kinematics) EstimateETA() float64 {
 	if k.Distance <= 0 {
 		return 0
 	}
+	if k.Speed <= 0.01 && k.StopDistance != nil {
+		return 999.0 // Veicolo fermo al rosso/in coda
+	}
 
 	diff := k.TargetSpeed - k.Speed
 	if math.Abs(diff) < 1e-6 {
-		return k.Distance / k.Speed
+		eff := math.Max(k.Speed, MinSpeed)
+		return k.Distance / eff
 	}
 
 	var accelRate, signedAccel float64
@@ -128,5 +169,6 @@ func (k *Kinematics) EstimateETA() float64 {
 	}
 
 	remainingDist := k.Distance - dRamp
-	return tRamp + (remainingDist / k.TargetSpeed)
+	effTarget := math.Max(k.TargetSpeed, MinSpeed)
+	return tRamp + (remainingDist / effTarget)
 }
