@@ -31,3 +31,4 @@ Thumbs.db
 # Local environment
 .env
 .env.*
+results_*.json

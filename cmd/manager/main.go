@@ -44,7 +44,7 @@ func (s *intersectionServer) Negotiate(stream pb.IntersectionService_NegotiateSe
 		if currentVehicleID != "" {
 			s.removeVehicleFromControllers(currentVehicleID)
 			if completedCleanly && s.metrics != nil {
-				s.metrics.RecordVehicleCompleted()
+				s.metrics.RecordVehicleCompletedAt(currentVehicleID, time.Now())
 			}
 			slog.Info("Veicolo rimosso dal registro",
 				slog.String("vehicle_id", currentVehicleID),
@@ -95,20 +95,20 @@ func (s *intersectionServer) Negotiate(stream pb.IntersectionService_NegotiateSe
 
 		currentVehicleID = req.VehicleId
 
+		now := time.Now()
+		if s.metrics != nil {
+			s.metrics.RecordTelemetry(req, now)
+		}
+
 		if req.HasExited {
 			s.removeVehicleFromControllers(req.VehicleId)
 			completedCleanly = true
 			return nil
 		}
 
-		if s.metrics != nil {
-			s.metrics.RecordVehicleSeen(req.VehicleId)
-		}
-
 		var res *pb.ManagerResponse
 
 		if s.mode == "traffic_light" {
-			now := time.Now()
 			serverNowMs := now.UnixMilli()
 			decision, suggestedETA, stopDist := s.trafficLight.Evaluate(req, now)
 
@@ -212,6 +212,9 @@ func main() {
 	if mode == "" {
 		mode = "aim"
 	}
+	metricsOut := os.Getenv("METRICS_OUT")
+	
+	flag.StringVar(&metricsOut, "metrics-out", metricsOut, "Percorso file JSON report finale (default: results_<mode>.json)")
 	flag.StringVar(&mode, "mode", mode, "Modalità operativa: aim (default) oppure traffic_light")
 	flag.Parse()
 
@@ -228,7 +231,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	metrics := NewMetrics()
+	metrics := NewMetricsWithConfig(mode, metricsOut)
+	
 	grpcServer := grpc.NewServer()
 	server := &intersectionServer{
 		mode:         mode,
